@@ -1,0 +1,42 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 2012
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TrafficSimulation", "TrafficSimulation\TrafficSimulation.vcxproj", "{EAE64A7C-CEED-42E7-8022-23717F3268A0}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TrafficSimulationCpp", "TrafficSimulationCpp\TrafficSimulationCpp.vcxproj", "{0E685634-7078-4CB4-BA21-81C0BDABB63F}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GraphCPP", "GraphCPP\GraphCPP.vcxproj", "{2A1E86FA-A897-4C5A-8B4E-4D6F8721B827}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Debug|x64 = Debug|x64
+		Release|Win32 = Release|Win32
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EAE64A7C-CEED-42E7-8022-23717F3268A0}.Debug|Win32.ActiveCfg = Debug|Win32
+		{EAE64A7C-CEED-42E7-8022-23717F3268A0}.Debug|Win32.Build.0 = Debug|Win32
+		{EAE64A7C-CEED-42E7-8022-23717F3268A0}.Debug|x64.ActiveCfg = Debug|x64
+		{EAE64A7C-CEED-42E7-8022-23717F3268A0}.Debug|x64.Build.0 = Debug|x64
+		{EAE64A7C-CEED-42E7-8022-23717F3268A0}.Release|Win32.ActiveCfg = Release|Win32
+		{EAE64A7C-CEED-42E7-8022-23717F3268A0}.Release|Win32.Build.0 = Release|Win32
+		{EAE64A7C-CEED-42E7-8022-23717F3268A0}.Release|x64.ActiveCfg = Release|x64
+		{EAE64A7C-CEED-42E7-8022-23717F3268A0}.Release|x64.Build.0 = Release|x64
+		{0E685634-7078-4CB4-BA21-81C0BDABB63F}.Debug|Win32.ActiveCfg = Debug|Win32
+		{0E685634-7078-4CB4-BA21-81C0BDABB63F}.Debug|Win32.Build.0 = Debug|Win32
+		{0E685634-7078-4CB4-BA21-81C0BDABB63F}.Debug|x64.ActiveCfg = Debug|Win32
+		{0E685634-7078-4CB4-BA21-81C0BDABB63F}.Release|Win32.ActiveCfg = Release|Win32
+		{0E685634-7078-4CB4-BA21-81C0BDABB63F}.Release|Win32.Build.0 = Release|Win32
+		{0E685634-7078-4CB4-BA21-81C0BDABB63F}.Release|x64.ActiveCfg = Release|Win32
+		{2A1E86FA-A897-4C5A-8B4E-4D6F8721B827}.Debug|Win32.ActiveCfg = Debug|Win32
+		{2A1E86FA-A897-4C5A-8B4E-4D6F8721B827}.Debug|Win32.Build.0 = Debug|Win32
+		{2A1E86FA-A897-4C5A-8B4E-4D6F8721B827}.Debug|x64.ActiveCfg = Debug|Win32
+		{2A1E86FA-A897-4C5A-8B4E-4D6F8721B827}.Release|Win32.ActiveCfg = Release|Win32
+		{2A1E86FA-A897-4C5A-8B4E-4D6F8721B827}.Release|Win32.Build.0 = Release|Win32
+		{2A1E86FA-A897-4C5A-8B4E-4D6F8721B827}.Release|x64.ActiveCfg = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
