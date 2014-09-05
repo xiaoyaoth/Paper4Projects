@@ -11,7 +11,7 @@ int main(int argc, char *argv[]){
 	//argv[1]: config.txt
 	//argv[2]: numAgent
 	init<SocialForceAgentData>(argv[1]);
-	SocialForceModel *model_h = new SocialForceModel(atoi(argv[2]));
+	SocialForceModel *model_h = new SocialForceModel(atoi(argv[2]), *argv[3], *argv[4]);
 	/*Main work started here*/
 
 	cudaEvent_t start, stop;

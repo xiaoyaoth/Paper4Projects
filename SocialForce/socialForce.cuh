@@ -85,6 +85,9 @@ struct obstacleLine
 __constant__ int numAgent;
 int numAgentHost;
 
+__constant__ char cloneid1;
+__constant__ char cloneid2;
+
 class SocialForceModel;
 class SocialForceAgent;
 class SocialForceClone;
@@ -93,26 +96,40 @@ __constant__ struct obstacleLine obsLines[2];
 __constant__ int obsLineNum;
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
+__global__ void checkCloneBondary(SocialForceModel *sfModel);
 
 class SocialForceClone {
 public:
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agentPool, *agentPoolHost;
 	struct obstacleLine obsLines[2];
 
-	__host__ SocialForceClone(int num) {
-		agentPoolHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(numAgentHost, numAgentHost, sizeof(SocialForceAgentData));
+	__host__ SocialForceClone(int num, int numMax, float gateSize) {
+		agentPoolHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(num, numMax, sizeof(SocialForceAgentData));
 		util::hostAllocCopyToDevice<AgentPool<SocialForceAgent, SocialForceAgentData> >(agentPoolHost, &agentPool);
 
-		int obsLineNumHost = 2;
-		size_t obsLinesSize = sizeof(struct obstacleLine) * obsLineNumHost;
-		struct obstacleLine *obsLinesHost = (struct obstacleLine *)malloc(obsLinesSize);
-		obsLinesHost[0].init(0.25 * modelHostParams.WIDTH, -20, 0.25 * modelHostParams.HEIGHT, 0.5 * modelHostParams.HEIGHT - 2);
-		obsLinesHost[1].init(0.25 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + 1, 0.25 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
-
-		cudaMemcpyToSymbol(obsLines, obsLinesHost, obsLinesSize, 0, cudaMemcpyHostToDevice);
-		cudaMemcpyToSymbol(obsLineNum, &obsLineNumHost, sizeof(int), 0, cudaMemcpyHostToDevice);
-		getLastCudaError("cudaMemcpyToSymbol:obsLines");
+		obsLines[0].init(0.25 * modelHostParams.WIDTH, -20, 0.25 * modelHostParams.HEIGHT, 0.5 * modelHostParams.HEIGHT - gateSize);
+		obsLines[1].init(0.25 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + gateSize, 0.25 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
 	}
+
+	__host__ void start(GModel *model) {
+		int AGENT_NO = this->agentPoolHost->numElem;
+		int gSize = GRID_SIZE(AGENT_NO);
+		addAgentsOnDevice<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)model->model);
+	}
+
+	__host__ void preStep(GModel *model) {
+		this->agentPoolHost->registerPool(model->worldHost, model->schedulerHost, this->agentPool);
+	}
+
+	__host__ void step(GModel *model) {
+		int numStepped = 0;
+		numStepped += this->agentPoolHost->stepPoolAgent(model->model, numStepped);
+	}
+
+	__host__ void stop() {
+
+	}
+
 };
 
 class SocialForceModel : public GModel {
@@ -123,15 +140,15 @@ public:
 	SocialForceClone *clone1, *clone1Host;
 	SocialForceClone *clone2, *clone2Host;
 	
-	__host__ SocialForceModel(int num){
+	__host__ SocialForceModel(int num, char cloneid1Host, char cloneid2Host) {
 
 		numAgentHost = num;
 		cudaMemcpyToSymbol(numAgent, &num, sizeof(int));
 
-		clone1Host = new SocialForceClone(num);
+		clone1Host = new SocialForceClone(num, num, 2);
 		util::hostAllocCopyToDevice<SocialForceClone>(clone1Host, &clone1);
 
-		clone2Host = new SocialForceClone(num);
+		clone2Host = new SocialForceClone(num, num, 4);
 		util::hostAllocCopyToDevice<SocialForceClone>(clone2Host, &clone2);
 
 		//agentPoolHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(numAgentHost, numAgentHost, sizeof(SocialForceAgentData));
@@ -145,13 +162,16 @@ public:
 
 		util::hostAllocCopyToDevice<SocialForceModel>(this, (SocialForceModel**)&this->model);
 
+		cudaMemcpyToSymbol(cloneid1, &cloneid1Host, sizeof(char));
+		cudaMemcpyToSymbol(cloneid2, &cloneid2Host, sizeof(char));
+
 	}
 
 	__host__ void start()
 	{
-		int AGENT_NO = this->agentPoolHost->numElem;
-		int gSize = GRID_SIZE(AGENT_NO);
-		addAgentsOnDevice<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
+
+		clone1Host->start(this);
+
 #ifdef _WIN32
 		GSimVisual::getInstance().setWorld(this->world);
 #endif
@@ -162,8 +182,11 @@ public:
 
 	__host__ void preStep()
 	{
-		this->agentPoolHost->registerPool(this->worldHost, this->schedulerHost, this->agentPool);
+
+		clone1Host->preStep(this);
+		clone2Host->preStep(this);
 		cudaMemcpyToSymbol(modelDevParams, &modelHostParams, sizeof(modelConstants));
+
 #ifdef _WIN32
 		GSimVisual::getInstance().animate();
 #endif
@@ -171,8 +194,8 @@ public:
 
 	__host__ void step()
 	{
-		int numStepped = 0;
-		numStepped += this->agentPoolHost->stepPoolAgent(this->model, numStepped);
+		clone1Host->step(this);
+		clone2Host->step(this);
 	}
 
 	__host__ void stop()
@@ -203,13 +226,13 @@ public:
 	GRandom *random;
 	SocialForceModel *model;
 
-	__device__ void init(SocialForceModel *sfModel, int dataSlot) {
+	__device__ void init(SocialForceModel *sfModel, SocialForceClone *clone, int dataSlot, uchar4 color, char cloneid) {
 		this->model = sfModel;
 		this->random = sfModel->random;
-		this->color = colorConfigs.green;
+		this->color = color;
 
-		SocialForceAgentData *data = &sfModel->agentPool->dataArray[dataSlot];
-		SocialForceAgentData *dataCopy = &sfModel->agentPool->dataCopyArray[dataSlot];
+		SocialForceAgentData *data = &clone->agentPool->dataArray[dataSlot];
+		SocialForceAgentData *dataCopy = &clone->agentPool->dataCopyArray[dataSlot];
 		data->goal.x = 0.25 * modelDevParams.WIDTH;
 		data->goal.y = 0.50 * modelDevParams.HEIGHT;
 		data->loc.x = data->goal.x + (modelDevParams.WIDTH - data->goal.x) * this->random->uniform() - 0.1;
@@ -218,6 +241,11 @@ public:
 		data->velocity.y = 4 * (this->random->uniform()-0.5);
 		data->v0 = 2;
 		data->mass = 50;
+		data->cloneid.x = 0;
+
+		if (threadIdx.x + blockIdx.x * blockDim.x == 0 && cloneid == 1)
+			data->cloneid.x = 1;
+
 		*dataCopy = *data;
 
 		this->data = data;
@@ -299,8 +327,8 @@ public:
 		while (otherData != NULL) {
 			otherDataLocal = *otherData;
 			ds = length(otherDataLocal.loc - loc);
-			if (ds < 6 && ds > 0) {
-				info.count++;
+			if (ds < 6 && ds > 0 && otherDataLocal.cloneid.x == dataLocal.cloneid.x) {
+			//if (ds < 6 && ds > 0 ) {
 				computeSocialForce(dataLocal, otherDataLocal, fSum);
 			}
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
@@ -408,9 +436,27 @@ __global__ void addAgentsOnDevice(SocialForceModel *sfModel){
 	if (idx < numAgent){ // user init step
 		//Add agent here
 		int dataSlot = idx;
-		SocialForceAgent *ag = &sfModel->agentPool->agentArray[dataSlot];
-		ag->init(sfModel, dataSlot);
-		sfModel->agentPool->add(ag, dataSlot);
+		SocialForceAgent *ag = &sfModel->clone1->agentPool->agentArray[dataSlot];
+		ag->init(sfModel, sfModel->clone1, dataSlot, colorConfigs.green, cloneid1);
+		sfModel->clone1->agentPool->add(ag, dataSlot);
+		
+		ag = &sfModel->clone2->agentPool->agentArray[dataSlot];
+		ag->init(sfModel, sfModel->clone2, dataSlot, colorConfigs.red, cloneid2);
+		sfModel->clone2->agentPool->add(ag, dataSlot);
+	}
+}
+
+__global__ void checkCloneBoundary(SocialForceModel *sfModel) {
+	float2 clone2GateDown, clone2GateUp;
+	clone2GateDown = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT - 4);
+	clone2GateDown = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT + 4);
+	int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	AgentPool<SocialForceAgent, SocialForceAgentData> *clone1pool = sfModel->clone1->agentPool;
+	if (idx < clone1pool->numElem) {
+		GAgent *ag = clone1pool->agentPtrArray[idx];
+		float2 loc = ag->data->loc;
+		if (length(loc - clone2GateDown) < 6 || length(loc - clone2GateUp) < 6)
+			;// clone ag and put in clone2
 	}
 }
 
