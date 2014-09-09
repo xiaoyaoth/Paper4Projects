@@ -92,8 +92,8 @@ class SocialForceModel;
 class SocialForceAgent;
 class SocialForceClone;
 
-__constant__ struct obstacleLine obsLines[2];
-__constant__ int obsLineNum;
+//__constant__ struct obstacleLine obsLines[2];
+//__constant__ int obsLineNum;
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
 __global__ void cloneBoundary(SocialForceModel *sfmodel);
@@ -103,13 +103,17 @@ class SocialForceClone {
 public:
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agentPool, *agentPoolHost;
 	struct obstacleLine obsLines[2];
+	int obsLineNum;
+	float gateSize;
 
-	__host__ SocialForceClone(int num, int numMax, float gateSize) {
+	__host__ SocialForceClone(int num, int numMax, float gs, int numLine) {
 		agentPoolHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(num, numMax, sizeof(SocialForceAgentData));
 		util::hostAllocCopyToDevice<AgentPool<SocialForceAgent, SocialForceAgentData> >(agentPoolHost, &agentPool);
 
-		obsLines[0].init(0.25 * modelHostParams.WIDTH, -20, 0.25 * modelHostParams.HEIGHT, 0.5 * modelHostParams.HEIGHT - gateSize);
-		obsLines[1].init(0.25 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + gateSize, 0.25 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
+		obsLines[0].init(0.25 * modelHostParams.WIDTH, -20, 0.25 * modelHostParams.HEIGHT, 0.5 * modelHostParams.HEIGHT - gs);
+		obsLines[1].init(0.25 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + gs, 0.25 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
+		obsLineNum = numLine;
+		gateSize = gs;
 	}
 
 	__host__ void start(GModel *model) {
@@ -131,6 +135,63 @@ public:
 
 	}
 
+	__device__ void condition(float2 loc, float2 velo, float mass, float cMass, float2 &fSum) {
+		for (int wallIdx = 0; wallIdx < obsLineNum; wallIdx++) {
+			float diw, crx, cry;
+			diw = obsLines[wallIdx].pointToLineDist(loc, crx, cry);
+			float virDiw = DIST(loc.x, loc.y, crx, cry);
+			float niwx = (loc.x - crx) / virDiw;
+			float niwy = (loc.y - cry) / virDiw;
+			float drw = mass / cMass - diw;
+			float fiw1 = A * exp(drw / B);
+			if (drw > 0)
+				fiw1 += k1 * drw;
+			float fniwx = fiw1 * niwx;
+			float fniwy = fiw1 * niwy;
+
+			float fiwKgx = 0, fiwKgy = 0;
+			if (drw > 0)
+			{
+				float fiwKg = k2 * drw * (velo.x * (-niwy) + velo.y * niwx);
+				fiwKgx = fiwKg * (-niwy);
+				fiwKgy = fiwKg * niwx;
+			}
+
+			fSum.x += fniwx - fiwKgx;
+			fSum.y += fniwy - fiwKgy;
+		}
+	}
+
+	__device__ void condition2(float2 loc, float2 newVelo, float tick, float &mint) {
+		for (int wallIdx = 0; wallIdx < obsLineNum; wallIdx++) 
+		{
+			float crx, cry, tt;
+			int ret = obsLines[wallIdx].intersection2LineSeg(
+				loc.x, 
+				loc.y, 
+				loc.x + 0.5 * newVelo.x * tick,
+				loc.y + 0.5 * newVelo.y * tick,
+				crx,
+				cry
+				);
+			if (ret == 1) 
+			{
+				if (fabs(crx - loc.x) > 0)
+					tt = (crx - loc.x) / (newVelo.x * tick);
+				else
+					tt = (crx - loc.y) / (newVelo.y * tick + 1e-20);
+				if (tt < mint)
+					mint = tt;
+			}
+		}
+	}
+
+	__device__ void condition3(float2 newLoc, float mass, float cMass, float2 &newGoal) {
+		if ((newLoc.x - mass/cMass <= 0.25 * modelDevParams.WIDTH) && (newLoc.y - mass/cMass > 0.5 * modelDevParams.HEIGHT - gateSize) && (newLoc.y - mass/cMass < 0.5 * modelDevParams.HEIGHT + gateSize)) 
+		{
+			newGoal.x = 0;
+		}
+	}
 };
 
 class SocialForceModel : public GModel {
@@ -146,10 +207,10 @@ public:
 		numAgentHost = num;
 		cudaMemcpyToSymbol(numAgent, &num, sizeof(int));
 
-		clone1Host = new SocialForceClone(num, num, 2);
+		clone1Host = new SocialForceClone(num, num, 2, 2);
 		util::hostAllocCopyToDevice<SocialForceClone>(clone1Host, &clone1);
 
-		clone2Host = new SocialForceClone(0, num, 4);
+		clone2Host = new SocialForceClone(0, num, 20, 2);
 		util::hostAllocCopyToDevice<SocialForceClone>(clone2Host, &clone2);
 
 		//agentPoolHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(numAgentHost, numAgentHost, sizeof(SocialForceAgentData));
@@ -183,9 +244,11 @@ public:
 
 	__host__ void preStep()
 	{
+#ifdef CLONE
 		int AGENT_NO = this->clone1Host->agentPoolHost->numElem;
 		int gSize = GRID_SIZE(AGENT_NO);
 		cloneBoundary<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
+#endif
 
 		clone1Host->preStep(this);
 		clone2Host->preStep(this);
@@ -202,11 +265,11 @@ public:
 	{
 		clone1Host->step(this);
 		clone2Host->step(this);
-
+#ifdef CLONE
 		int AGENT_NO = this->clone1Host->agentPoolHost->numElem;
 		int gSize = GRID_SIZE(AGENT_NO);
-		//cloneBoundary<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
-		//cloneNeighbor<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
+		cloneNeighbor<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
+#endif
 	}
 
 	__host__ void stop()
@@ -236,12 +299,15 @@ class SocialForceAgent : public GAgent {
 public:
 	GRandom *random;
 	SocialForceModel *model;
+	SocialForceClone *myClone;
 
 	__device__ void init(SocialForceModel *sfModel, SocialForceClone *clone, int dataSlot, uchar4 color, char cloneid) {
 		this->model = sfModel;
 		this->random = sfModel->random;
 		this->color = color;
 		this->cloned = false;
+		this->cloning = false;
+		this->myClone = clone;
 
 		SocialForceAgentData *data = &clone->agentPool->dataArray[dataSlot];
 		SocialForceAgentData *dataCopy = &clone->agentPool->dataCopyArray[dataSlot];
@@ -357,37 +423,45 @@ public:
 		while (otherData != NULL) {
 			otherDataLocal = *otherData;
 			ds = length(otherDataLocal.loc - loc);
-			if (ds < 6 && ds > 0 && otherDataLocal.cloneid.x == dataLocal.cloneid.x) {
-				computeSocialForce(dataLocal, otherDataLocal, fSum);
-			}
+			if (ds < 6 && ds > 0 )
+				if (otherDataLocal.cloneid.x == dataLocal.cloneid.x) 
+					computeSocialForce(dataLocal, otherDataLocal, fSum);
+				else
+					this->cloning = true;
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 		}
 
-		//compute force with wall
-		for (int wallIdx = 0; wallIdx < obsLineNum; wallIdx++) {
-			float diw, crx, cry;
-			diw = obsLines[wallIdx].pointToLineDist(loc, crx, cry);
-			float virDiw = DIST(loc.x, loc.y, crx, cry);
-			float niwx = (loc.x - crx) / virDiw;
-			float niwy = (loc.y - cry) / virDiw;
-			float drw = mass / cMass - diw;
-			float fiw1 = A * exp(drw / B);
-			if (drw > 0)
-				fiw1 += k1 * drw;
-			float fniwx = fiw1 * niwx;
-			float fniwy = fiw1 * niwy;
+		myClone->condition(loc, velo, mass, cMass, fSum);
+		if (dataLocal.cloneid.x == 1)
+			sfModel->clone2->condition(loc, velo, mass, cMass, fSum);
+		else
+			sfModel->clone1->condition(loc, velo, mass, cMass, fSum);
 
-			float fiwKgx = 0, fiwKgy = 0;
-			if (drw > 0)
-			{
-				float fiwKg = k2 * drw * (velo.x * (-niwy) + velo.y * niwx);
-				fiwKgx = fiwKg * (-niwy);
-				fiwKgy = fiwKg * niwx;
-			}
+		////compute force with wall
+		//for (int wallIdx = 0; wallIdx < obsLineNum; wallIdx++) {
+		//	float diw, crx, cry;
+		//	diw = obsLines[wallIdx].pointToLineDist(loc, crx, cry);
+		//	float virDiw = DIST(loc.x, loc.y, crx, cry);
+		//	float niwx = (loc.x - crx) / virDiw;
+		//	float niwy = (loc.y - cry) / virDiw;
+		//	float drw = mass / cMass - diw;
+		//	float fiw1 = A * exp(drw / B);
+		//	if (drw > 0)
+		//		fiw1 += k1 * drw;
+		//	float fniwx = fiw1 * niwx;
+		//	float fniwy = fiw1 * niwy;
 
-			fSum.x += fniwx - fiwKgx;
-			fSum.y += fniwy - fiwKgy;
-		}
+		//	float fiwKgx = 0, fiwKgy = 0;
+		//	if (drw > 0)
+		//	{
+		//		float fiwKg = k2 * drw * (velo.x * (-niwy) + velo.y * niwx);
+		//		fiwKgx = fiwKg * (-niwy);
+		//		fiwKgy = fiwKg * niwx;
+		//	}
+
+		//	fSum.x += fniwx - fiwKgx;
+		//	fSum.y += fniwy - fiwKgy;
+		//}
 
 
 		//sum up
@@ -408,37 +482,47 @@ public:
 		}
 
 		float mint = 1;
-		for (int wallIdx = 0; wallIdx < obsLineNum; wallIdx++) 
-		{
-			float crx, cry, tt;
-			int ret = obsLines[wallIdx].intersection2LineSeg(
-				loc.x, 
-				loc.y, 
-				loc.x + 0.5 * newVelo.x * tick,
-				loc.y + 0.5 * newVelo.y * tick,
-				crx,
-				cry
-				);
-			if (ret == 1) 
-			{
-				if (fabs(crx - loc.x) > 0)
-					tt = (crx - loc.x) / (newVelo.x * tick);
-				else
-					tt = (crx - loc.y) / (newVelo.y * tick + 1e-20);
-				if (tt < mint)
-					mint = tt;
-			}
-		}
+		//for (int wallIdx = 0; wallIdx < obsLineNum; wallIdx++) 
+		//{
+		//	float crx, cry, tt;
+		//	int ret = obsLines[wallIdx].intersection2LineSeg(
+		//		loc.x, 
+		//		loc.y, 
+		//		loc.x + 0.5 * newVelo.x * tick,
+		//		loc.y + 0.5 * newVelo.y * tick,
+		//		crx,
+		//		cry
+		//		);
+		//	if (ret == 1) 
+		//	{
+		//		if (fabs(crx - loc.x) > 0)
+		//			tt = (crx - loc.x) / (newVelo.x * tick);
+		//		else
+		//			tt = (crx - loc.y) / (newVelo.y * tick + 1e-20);
+		//		if (tt < mint)
+		//			mint = tt;
+		//	}
+		//}
+
+		if (dataLocal.cloneid.x == 1)
+			sfModel->clone2->condition2(loc, newVelo, tick, mint);
+		else
+			sfModel->clone1->condition2(loc, newVelo, tick, mint);
 
 		newVelo.x *= mint;
 		newVelo.y *= mint;
 		newLoc.x += newVelo.x * tick;
 		newLoc.y += newVelo.y * tick;
 
-		if ((newLoc.x - mass/cMass <= 0.25 * modelDevParams.WIDTH) && (newLoc.y - mass/cMass > 0.5 * modelDevParams.HEIGHT - 2) && (newLoc.y - mass/cMass < 0.5 * modelDevParams.HEIGHT + 1)) 
-		{
-			newGoal.x = 0;
-		}
+		//if ((newLoc.x - mass/cMass <= 0.25 * modelDevParams.WIDTH) && (newLoc.y - mass/cMass > 0.5 * modelDevParams.HEIGHT - 2) && (newLoc.y - mass/cMass < 0.5 * modelDevParams.HEIGHT + 1)) 
+		//{
+		//	newGoal.x = 0;
+		//}
+
+		if (dataLocal.cloneid.x == 1)
+			sfModel->clone2->condition3(loc, mass, cMass, newGoal);
+		else
+			sfModel->clone1->condition3(loc, mass, cMass, newGoal);
 
 		newLoc.x = correctCrossBoader(newLoc.x, width);
 		newLoc.y = correctCrossBoader(newLoc.y, height);
@@ -502,32 +586,53 @@ __global__ void cloneBoundary(SocialForceModel *sfModel) {
 __global__ void cloneNeighbor(SocialForceModel *sfModel) {
 
 	int idx = threadIdx.x + blockIdx.x * blockDim.x;
-
-	GWorld *world = sfModel->world;
-	SocialForceAgent *ag = sfModel->clone1->agentPool->agentPtrArray[idx];
-	SocialForceAgentData dataLocal = *(SocialForceAgentData*)ag->data;
-
-	iterInfo info;
-	world->neighborQueryInit(dataLocal.loc, 6, info);
-	SocialForceAgentData otherDataLocal, *otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
+	AgentPool<SocialForceAgent, SocialForceAgentData> *clone1pool = sfModel->clone1->agentPool;
 	AgentPool<SocialForceAgent, SocialForceAgentData> *clone2pool = sfModel->clone2->agentPool;
-
-	while (otherData != NULL) {
-		otherDataLocal = *otherData;
-		float ds = length(otherDataLocal.loc - dataLocal.loc);
-		if (ds < 6 && ds > 0 && ag->cloned == false && otherDataLocal.cloneid.x != dataLocal.cloneid.x) {
-			//if (ds < 6 && ds > 0 ) {
-
+	if (idx < clone1pool->numElem) {
+		SocialForceAgent *ag = clone1pool->agentPtrArray[idx];
+		float2 loc = ag->data->loc;
+		if (ag->cloning == true && ag->cloned == false) {
 			ag->cloned = true;
+			ag->cloning = false;
+
 			int agentSlot = clone2pool->agentSlot();
 			int dataSlot = clone2pool->dataSlot(agentSlot);
 
 			SocialForceAgent *ag2  = &clone2pool->agentArray[agentSlot];
 			ag2->init(ag, sfModel->clone2, dataSlot, colorConfigs.red);
 			clone2pool->add(ag2, agentSlot);
+
+			;// clone ag and put in clone2
 		}
-		otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 	}
+
+	//GWorld *world = sfModel->world;
+	//SocialForceAgent *ag = sfModel->clone1->agentPool->agentPtrArray[idx];
+	//SocialForceAgentData dataLocal = *(SocialForceAgentData*)ag->data;
+
+	//iterInfo info;
+	//world->neighborQueryInit(dataLocal.loc, 6, info);
+	//SocialForceAgentData otherDataLocal, *otherData;
+	//otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
+	//AgentPool<SocialForceAgent, SocialForceAgentData> *clone2pool = sfModel->clone2->agentPool;
+
+	//while (otherData != NULL) {
+	//	otherDataLocal = *otherData;
+	//	float ds = length(otherDataLocal.loc - dataLocal.loc);
+	//	if (ds < 6 && ds > 0 && ag->cloned == false && otherDataLocal.cloneid.x != dataLocal.cloneid.x) {
+	//		printf("alert ");
+	//		//if (ds < 6 && ds > 0 ) {
+
+	//		//ag->cloned = true;
+	//		//int agentSlot = clone2pool->agentSlot();
+	//		//int dataSlot = clone2pool->dataSlot(agentSlot);
+
+	//		//SocialForceAgent *ag2  = &clone2pool->agentArray[agentSlot];
+	//		//ag2->init(ag, sfModel->clone2, dataSlot, colorConfigs.red);
+	//		//clone2pool->add(ag2, agentSlot);
+	//	}
+	//	otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
+	//}
 }
 
 #endif
