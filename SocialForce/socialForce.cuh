@@ -96,7 +96,8 @@ __constant__ struct obstacleLine obsLines[2];
 __constant__ int obsLineNum;
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
-__global__ void checkCloneBondary(SocialForceModel *sfModel);
+__global__ void cloneBoundary(SocialForceModel *sfmodel);
+__global__ void cloneNeighbor(SocialForceModel *sfmodel);
 
 class SocialForceClone {
 public:
@@ -148,7 +149,7 @@ public:
 		clone1Host = new SocialForceClone(num, num, 2);
 		util::hostAllocCopyToDevice<SocialForceClone>(clone1Host, &clone1);
 
-		clone2Host = new SocialForceClone(num, num, 4);
+		clone2Host = new SocialForceClone(0, num, 4);
 		util::hostAllocCopyToDevice<SocialForceClone>(clone2Host, &clone2);
 
 		//agentPoolHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(numAgentHost, numAgentHost, sizeof(SocialForceAgentData));
@@ -182,6 +183,9 @@ public:
 
 	__host__ void preStep()
 	{
+		int AGENT_NO = this->clone1Host->agentPoolHost->numElem;
+		int gSize = GRID_SIZE(AGENT_NO);
+		cloneBoundary<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
 
 		clone1Host->preStep(this);
 		clone2Host->preStep(this);
@@ -190,12 +194,19 @@ public:
 #ifdef _WIN32
 		GSimVisual::getInstance().animate();
 #endif
+
+		getLastCudaError("copyHostToDevice");
 	}
 
 	__host__ void step()
 	{
 		clone1Host->step(this);
 		clone2Host->step(this);
+
+		int AGENT_NO = this->clone1Host->agentPoolHost->numElem;
+		int gSize = GRID_SIZE(AGENT_NO);
+		//cloneBoundary<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
+		//cloneNeighbor<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
 	}
 
 	__host__ void stop()
@@ -230,6 +241,7 @@ public:
 		this->model = sfModel;
 		this->random = sfModel->random;
 		this->color = color;
+		this->cloned = false;
 
 		SocialForceAgentData *data = &clone->agentPool->dataArray[dataSlot];
 		SocialForceAgentData *dataCopy = &clone->agentPool->dataCopyArray[dataSlot];
@@ -241,12 +253,31 @@ public:
 		data->velocity.y = 4 * (this->random->uniform()-0.5);
 		data->v0 = 2;
 		data->mass = 50;
-		data->cloneid.x = 0;
+		data->cloneid.x = cloneid;
 
-		if (threadIdx.x + blockIdx.x * blockDim.x == 0 && cloneid == 1)
-			data->cloneid.x = 1;
+		//if (threadIdx.x + blockIdx.x * blockDim.x == 0 && cloneid == 1)
+		//	data->cloneid.x = 1;
 
 		*dataCopy = *data;
+
+		this->data = data;
+		this->dataCopy = dataCopy;
+	}
+
+	__device__ void init(SocialForceAgent *agent, SocialForceClone *clone, int dataSlot, uchar4 color) {
+		this->model = agent->model;
+		this->random = agent->random;
+		this->color = color;
+		this->cloned = false;
+
+		SocialForceAgentData *data = &clone->agentPool->dataArray[dataSlot];
+		SocialForceAgentData *dataCopy = &clone->agentPool->dataCopyArray[dataSlot];
+
+		*data = *(SocialForceAgentData*)agent->data;
+		*dataCopy = *(SocialForceAgentData*)agent->dataCopy;
+
+		data->cloneid.x++;
+		dataCopy->cloneid.x++;
 
 		this->data = data;
 		this->dataCopy = dataCopy;
@@ -299,8 +330,7 @@ public:
 
 		iterInfo info;
 
-		SocialForceAgentData *dataLocalPtr = (SocialForceAgentData*)this->data;
-		SocialForceAgentData dataLocal = *dataLocalPtr;
+		SocialForceAgentData dataLocal = *(SocialForceAgentData*)this->data;
 
 		const float2& loc = dataLocal.loc;
 		const float2& goal = dataLocal.goal;
@@ -328,7 +358,6 @@ public:
 			otherDataLocal = *otherData;
 			ds = length(otherDataLocal.loc - loc);
 			if (ds < 6 && ds > 0 && otherDataLocal.cloneid.x == dataLocal.cloneid.x) {
-			//if (ds < 6 && ds > 0 ) {
 				computeSocialForce(dataLocal, otherDataLocal, fSum);
 			}
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
@@ -440,23 +469,64 @@ __global__ void addAgentsOnDevice(SocialForceModel *sfModel){
 		ag->init(sfModel, sfModel->clone1, dataSlot, colorConfigs.green, cloneid1);
 		sfModel->clone1->agentPool->add(ag, dataSlot);
 		
-		ag = &sfModel->clone2->agentPool->agentArray[dataSlot];
-		ag->init(sfModel, sfModel->clone2, dataSlot, colorConfigs.red, cloneid2);
-		sfModel->clone2->agentPool->add(ag, dataSlot);
+		//ag = &sfModel->clone2->agentPool->agentArray[dataSlot];
+		//ag->init(sfModel, sfModel->clone2, dataSlot, colorConfigs.red, cloneid2);
+		//sfModel->clone2->agentPool->add(ag, dataSlot);
 	}
 }
 
-__global__ void checkCloneBoundary(SocialForceModel *sfModel) {
+__global__ void cloneBoundary(SocialForceModel *sfModel) {
 	float2 clone2GateDown, clone2GateUp;
 	clone2GateDown = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT - 4);
-	clone2GateDown = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT + 4);
+	clone2GateUp = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT + 4);
 	int idx = threadIdx.x + blockIdx.x * blockDim.x;
 	AgentPool<SocialForceAgent, SocialForceAgentData> *clone1pool = sfModel->clone1->agentPool;
+	AgentPool<SocialForceAgent, SocialForceAgentData> *clone2pool = sfModel->clone2->agentPool;
 	if (idx < clone1pool->numElem) {
-		GAgent *ag = clone1pool->agentPtrArray[idx];
+		SocialForceAgent *ag = clone1pool->agentPtrArray[idx];
 		float2 loc = ag->data->loc;
-		if (length(loc - clone2GateDown) < 6 || length(loc - clone2GateUp) < 6)
+		if ((length(loc - clone2GateDown) < 6 || length(loc - clone2GateUp) < 6) && ag->cloned == false) {
+			ag->cloned = true;
+			int agentSlot = clone2pool->agentSlot();
+			int dataSlot = clone2pool->dataSlot(agentSlot);
+
+			SocialForceAgent *ag2  = &clone2pool->agentArray[agentSlot];
+			ag2->init(ag, sfModel->clone2, dataSlot, colorConfigs.red);
+			clone2pool->add(ag2, agentSlot);
+
 			;// clone ag and put in clone2
+		}
+	}
+}
+
+__global__ void cloneNeighbor(SocialForceModel *sfModel) {
+
+	int idx = threadIdx.x + blockIdx.x * blockDim.x;
+
+	GWorld *world = sfModel->world;
+	SocialForceAgent *ag = sfModel->clone1->agentPool->agentPtrArray[idx];
+	SocialForceAgentData dataLocal = *(SocialForceAgentData*)ag->data;
+
+	iterInfo info;
+	world->neighborQueryInit(dataLocal.loc, 6, info);
+	SocialForceAgentData otherDataLocal, *otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
+	AgentPool<SocialForceAgent, SocialForceAgentData> *clone2pool = sfModel->clone2->agentPool;
+
+	while (otherData != NULL) {
+		otherDataLocal = *otherData;
+		float ds = length(otherDataLocal.loc - dataLocal.loc);
+		if (ds < 6 && ds > 0 && ag->cloned == false && otherDataLocal.cloneid.x != dataLocal.cloneid.x) {
+			//if (ds < 6 && ds > 0 ) {
+
+			ag->cloned = true;
+			int agentSlot = clone2pool->agentSlot();
+			int dataSlot = clone2pool->dataSlot(agentSlot);
+
+			SocialForceAgent *ag2  = &clone2pool->agentArray[agentSlot];
+			ag2->init(ag, sfModel->clone2, dataSlot, colorConfigs.red);
+			clone2pool->add(ag2, agentSlot);
+		}
+		otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 	}
 }
 
