@@ -335,6 +335,7 @@ public:
 		this->random = agent->random;
 		this->color = color;
 		this->cloned = false;
+		this->myClone = clone;
 
 		SocialForceAgentData *data = &clone->agentPool->dataArray[dataSlot];
 		SocialForceAgentData *dataCopy = &clone->agentPool->dataCopyArray[dataSlot];
@@ -424,7 +425,7 @@ public:
 			otherDataLocal = *otherData;
 			ds = length(otherDataLocal.loc - loc);
 			if (ds < 6 && ds > 0 )
-				if (otherDataLocal.cloneid.x == dataLocal.cloneid.x) 
+				if (otherDataLocal.cloneid.x >= dataLocal.cloneid.x) 
 					computeSocialForce(dataLocal, otherDataLocal, fSum);
 				else
 					this->cloning = true;
@@ -432,10 +433,6 @@ public:
 		}
 
 		myClone->condition(loc, velo, mass, cMass, fSum);
-		if (dataLocal.cloneid.x == 1)
-			sfModel->clone2->condition(loc, velo, mass, cMass, fSum);
-		else
-			sfModel->clone1->condition(loc, velo, mass, cMass, fSum);
 
 		////compute force with wall
 		//for (int wallIdx = 0; wallIdx < obsLineNum; wallIdx++) {
@@ -503,11 +500,7 @@ public:
 		//			mint = tt;
 		//	}
 		//}
-
-		if (dataLocal.cloneid.x == 1)
-			sfModel->clone2->condition2(loc, newVelo, tick, mint);
-		else
-			sfModel->clone1->condition2(loc, newVelo, tick, mint);
+		myClone->condition2(loc, newVelo, tick, mint);
 
 		newVelo.x *= mint;
 		newVelo.y *= mint;
@@ -519,10 +512,7 @@ public:
 		//	newGoal.x = 0;
 		//}
 
-		if (dataLocal.cloneid.x == 1)
-			sfModel->clone2->condition3(loc, mass, cMass, newGoal);
-		else
-			sfModel->clone1->condition3(loc, mass, cMass, newGoal);
+		myClone->condition3(loc, mass, cMass, newGoal);
 
 		newLoc.x = correctCrossBoader(newLoc.x, width);
 		newLoc.y = correctCrossBoader(newLoc.y, height);
@@ -561,15 +551,15 @@ __global__ void addAgentsOnDevice(SocialForceModel *sfModel){
 
 __global__ void cloneBoundary(SocialForceModel *sfModel) {
 	float2 clone2GateDown, clone2GateUp;
-	clone2GateDown = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT - 4);
-	clone2GateUp = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT + 4);
+	clone2GateDown = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT - 20);
+	clone2GateUp = make_float2(0.25 * modelDevParams.WIDTH, 0.5 * modelDevParams.HEIGHT + 20);
 	int idx = threadIdx.x + blockIdx.x * blockDim.x;
 	AgentPool<SocialForceAgent, SocialForceAgentData> *clone1pool = sfModel->clone1->agentPool;
 	AgentPool<SocialForceAgent, SocialForceAgentData> *clone2pool = sfModel->clone2->agentPool;
 	if (idx < clone1pool->numElem) {
 		SocialForceAgent *ag = clone1pool->agentPtrArray[idx];
 		float2 loc = ag->data->loc;
-		if ((length(loc - clone2GateDown) < 6 || length(loc - clone2GateUp) < 6) && ag->cloned == false) {
+		if ((length(loc - clone2GateDown) < 20 || length(loc - clone2GateUp) < 20) && ag->cloned == false) {
 			ag->cloned = true;
 			int agentSlot = clone2pool->agentSlot();
 			int dataSlot = clone2pool->dataSlot(agentSlot);
