@@ -111,7 +111,12 @@ __global__ void replaceWorldAgentsWithClonedAgents(
 	int numClonedAgent);
 
 __global__ void cloneKernel(SocialForceModel *sfModel, 
-	int numAgentLocal);
+							int numAgentLocal);
+
+__global__ void compareOriginAndClone(
+	AgentPool<SocialForceAgent, SocialForceAgentData> *clonedPool,
+	GWorld *clonedWorld,
+	int numClonedAgents) ;
 
 class SocialForceModel : public GModel {
 public:
@@ -121,7 +126,7 @@ public:
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agentsA, *agentsAHost;
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agentsB, *agentsBHost;
 
-	GWorld *cloneWorld, *cloneWorldHost;
+	GWorld *clonedWorld, *clonedWorldHost;
 	SocialForceAgent **agentPtrArrayUnsorted;
 
 	SocialForceAgentData *dataHost;
@@ -161,8 +166,8 @@ public:
 		worldHost = new GWorld();
 		util::hostAllocCopyToDevice<GWorld>(worldHost, &world);
 
-		cloneWorldHost = new GWorld();
-		util::hostAllocCopyToDevice<GWorld>(cloneWorldHost, &cloneWorld);
+		clonedWorldHost = new GWorld();
+		util::hostAllocCopyToDevice<GWorld>(clonedWorldHost, &clonedWorld);
 
 		//init utility
 		randomHost = new GRandom(modelHostParams.MAX_AGENT_NO);
@@ -207,38 +212,14 @@ public:
 
 		// register the original to original world
 		this->agentsAHost->registerPool(this->worldHost, this->schedulerHost, this->agentsA);
-
-		//register the cloned agents to the cloned world 84090944
-		this->agentsBHost->cleanup(this->agentsB);
-		int numAgentsB = this->agentsBHost->numElem;
-		//int numAgentsB = 0;
-		if (numAgentsB != 0) {
-			cudaMemcpy(cloneWorldHost->allAgents,
-				agentPtrArrayUnsorted, 
-				numAgentHost * sizeof(void*), 
-				cudaMemcpyDeviceToDevice);
-
-			int gSize = GRID_SIZE(numAgentsB);
-
-			replaceWorldAgentsWithClonedAgents
-				<<<gSize, BLOCK_SIZE>>>(
-				cloneWorldHost->allAgents, 
-				this->agentsBHost->agentPtrArray, 
-				numAgentsB);
-		}
-
-		//sort world and worldClone
+		util::genNeighbor(this->world, this->worldHost, this->agentsAHost->numElem);
 		cudaMemcpyToSymbol(modelDevParams, &modelHostParams, sizeof(modelConstants));
-		util::genNeighbor(this->world, this->worldHost, modelHostParams.AGENT_NO);
-		if (numAgentsB != 0)
-			util::genNeighbor(this->cloneWorld, this->cloneWorldHost, modelHostParams.AGENT_NO);
 
 #ifdef _WIN32
-		if (GSimVisual::clicks % 2 == 0)
+		if (GSimVisual::clicks % 2 == 1)
 			GSimVisual::getInstance().setWorld(this->world);
 		else
-			GSimVisual::getInstance().setWorld(this->cloneWorld);
-		GSimVisual::getInstance().animate();
+			GSimVisual::getInstance().setWorld(this->clonedWorld);
 #endif
 
 		getLastCudaError("copyHostToDevice");
@@ -261,15 +242,43 @@ public:
 		fout <<"==================="<<std::endl<<std::endl;
 		fout.flush();
 #endif
-
+		//1. run the original copy
 		this->agentsAHost->stepPoolAgent(this->model);
-		this->agentsBHost->stepPoolAgent(this->model);
-
 		int numAgentLocal = this->agentsAHost->numElem;
 		int gSize = GRID_SIZE(numAgentLocal);
 		cloneKernel<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model, numAgentLocal);
-		//doubleCheckKernel(this->model, numAgentLocal);
+
+		//2. run the cloned copy
+		//2.1. register the cloned agents to the c1loned world
+		this->agentsBHost->cleanup(this->agentsB);
+		int numAgentsB = this->agentsBHost->numElem;
+		gSize = GRID_SIZE(numAgentsB);
+		if (numAgentsB != 0) {
+			cudaMemcpy(clonedWorldHost->allAgents,
+				agentPtrArrayUnsorted, 
+				numAgentHost * sizeof(void*), 
+				cudaMemcpyDeviceToDevice);
+			replaceWorldAgentsWithClonedAgents
+				<<<gSize, BLOCK_SIZE>>>(
+				clonedWorldHost->allAgents, 
+				this->agentsBHost->agentPtrArray, 
+				numAgentsB);
+		}
+		if (numAgentsB != 0) {
+			//2.2. sort world and worldClone
+			util::genNeighbor(this->clonedWorld, this->clonedWorldHost, numAgentsB);
+
+			//2.3. step the cloned copy
+			this->agentsBHost->stepPoolAgent(this->model);
+
+			//3. double check
+			compareOriginAndClone<<<gSize, BLOCK_SIZE>>>(this->agentsB, clonedWorld, numAgentsB);
+		}
 		getLastCudaError("preStep");
+
+#ifdef _WIN32
+		GSimVisual::getInstance().animate();
+#endif
 	}
 
 	__host__ void stop()
@@ -306,6 +315,7 @@ public:
 	uchar4 cloneid;
 	bool cloned;
 	bool cloning;
+	SocialForceAgent *myOrigin;
 
 	__device__ void init(SocialForceModel *sfModel, int dataSlot) {
 		this->myModel = sfModel;
@@ -317,6 +327,7 @@ public:
 		this->id = dataSlot;
 		this->cloned = false;
 		this->cloning = false;
+		this->myOrigin = NULL;
 
 		SocialForceAgentData dataLocal; //= &sfModel->agentsA->dataArray[dataSlot];
 
@@ -347,7 +358,7 @@ public:
 
 	__device__ void initNewClone(SocialForceAgent *agent, int dataSlot) {
 		this->myModel = agent->myModel;
-		this->myWorld = myModel->cloneWorld;
+		this->myWorld = myModel->clonedWorld;
 		this->random = agent->random;
 		this->color = colorConfigs.red;
 
@@ -355,6 +366,7 @@ public:
 		this->id = agent->id;
 		this->cloned = false;
 		this->cloning = false;
+		this->myOrigin = agent;
 
 		SocialForceAgentData dataLocal;
 
@@ -363,7 +375,7 @@ public:
 		dataLocal.agentPtr = this;
 		*(SocialForceAgentData*)this->data = dataLocal;
 
-		dataLocal = *(SocialForceAgentData*)agent->dataCopy;
+		//dataLocal = *(SocialForceAgentData*)agent->dataCopy;
 		this->dataCopy = &myModel->agentsB->dataCopyArray[dataSlot];
 		dataLocal.agentPtr = this;
 		*(SocialForceAgentData*)this->dataCopy = dataLocal;
@@ -486,9 +498,6 @@ public:
 		SocialForceAgentData *otherData, otherDataLocal;
 		float ds = 0;
 
-		if (this->cloneid.x != '0' && stepCount == 49)
-			printf("clone 2\n");
-
 		world->neighborQueryInit(loc, 6, info);
 		otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 		while (otherData != NULL) {
@@ -497,10 +506,9 @@ public:
 			bool otherCloned = otherPtr->cloned;
 			ds = length(otherDataLocal.loc - loc);
 			if (ds < 6 && ds > 0 )
-				if (otherCloned == false) 
-					computeSocialForce(dataLocal, otherDataLocal, fSum);
-				else if (otherCloned == true) // decision point B: impaction from neighboring agent
-					this->cloning = true; 
+				computeSocialForce(dataLocal, otherDataLocal, fSum);
+			//else if (otherCloned == true) // decision point B: impaction from neighboring agent
+			//this->cloning = true; 
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 		}
 
@@ -516,10 +524,10 @@ public:
 		}
 
 		//decision point A: impaction from wall
-		if(holeB.pointToLineDist(loc) < 6) {
+		if(holeB.pointToLineDist(loc) < 20 && this->cloneid.x == '0') {
 			this->cloning = true;
 		}
-		
+
 		//sum up
 		dvt.x += fSum.x / mass;
 		dvt.y += fSum.y / mass;
@@ -582,7 +590,7 @@ public:
 		newLoc.y = correctCrossBoader(newLoc.y, height);
 
 		*(SocialForceAgentData*)this->dataCopy = dataLocal;
-	
+
 	}
 
 	__device__ void fillSharedMem(void *dataPtr){
@@ -637,31 +645,32 @@ __global__ void cloneKernel(SocialForceModel *sfModel, int numAgentLocal)
 	}
 }
 
-__global__ void doubleCheckKernel(SocialForceModel *sfModel, int numAgentLocal) 
-{
-	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
-	if (idx < numAgentLocal) {
-		SocialForceAgent *ag = &sfModel->agentsB->agentArray[idx];
-		ag->step(sfModel);
-	}
-}
-
 __global__ void compareOriginAndClone(
-	SocialForceAgent **cloneAgents,
-	SocialForceAgent **originalAgents,
+	AgentPool<SocialForceAgent, SocialForceAgentData> *clonedPool,
+	GWorld *clonedWorld,
 	int numClonedAgents) 
 {
 	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
 	if (idx < numClonedAgents) {
-		SocialForceAgent *clonedAg = cloneAgents[idx];
-		SocialForceAgentData clonedAgData = *(SocialForceAgentData*) clonedAg->data;
-		SocialForceAgent *originalAg; //= originalAgents[clonedAgData.id];
-		SocialForceAgentData originalAgData = *(SocialForceAgentData*) originalAg->data;
+		SocialForceAgent *clonedAg = clonedPool->agentPtrArray[idx];
+		SocialForceAgentData clonedAgData = *(SocialForceAgentData*) clonedAg->dataCopy;
+		SocialForceAgent *originalAg = clonedAg->myOrigin;
+		SocialForceAgentData originalAgData = *(SocialForceAgentData*) originalAg->dataCopy;
 
 		bool match;
 		//compare equivalence of two copies of data;
-
-
+		match = clonedAgData.loc.x == originalAgData.loc.x
+			&& clonedAgData.loc.y == originalAgData.loc.y
+			&& clonedAgData.velocity.x == originalAgData.velocity.x
+			&& clonedAgData.velocity.y == originalAgData.velocity.y
+			&& clonedAgData.goal.x == originalAgData.goal.x
+			&& clonedAgData.goal.y == originalAgData.goal.y;
+		if (match) {
+			//remove from cloned set, reset clone state to non-cloned
+			clonedPool->remove(idx);
+			originalAg->cloned = false;
+			originalAg->cloning = false;
+		}
 	}
 }
 
