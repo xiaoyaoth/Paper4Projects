@@ -15,7 +15,7 @@ typedef struct SocialForceAgentData : public GAgentData_t {
 	float2 velocity;
 	float v0;
 	float mass;
-	int dataOrCopy;
+	int id;
 	__device__ void putDataInSmem(GAgent *ag);
 };
 
@@ -100,10 +100,11 @@ __constant__ obstacleLine gateTwoA[2];
 __constant__ obstacleLine gateTwoB[2];
 __constant__ obstacleLine holeB;
 #define GATE_LINE_NUM 2
-#define GATE_SIZE_A 2
+#define GATE_SIZE_A 20
 #define GATE_SIZE_B 20
 
 #define MONITOR_STEP 75
+#define CLONE
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
 
@@ -212,10 +213,8 @@ public:
 	__host__ void preStep()
 	{
 
-		// register the original to original world
-		
 #ifdef _WIN32
-		if (GSimVisual::clicks % 2 == 1)
+		if (GSimVisual::clicks % 2 == 0)
 			GSimVisual::getInstance().setWorld(this->world);
 		else
 			GSimVisual::getInstance().setWorld(this->clonedWorld);
@@ -231,28 +230,30 @@ public:
 		util::genNeighbor(this->world, this->worldHost, this->agentsAHost->numElem);
 		cudaMemcpyToSymbol(modelDevParams, &modelHostParams, sizeof(modelConstants));
 		this->agentsAHost->stepPoolAgent(this->model);
-				
+#ifdef CLONE	
 		//1.1 clone agents
 		int numAgentLocal = this->agentsAHost->numElem;
 		int gSize = GRID_SIZE(numAgentLocal);
 		cloneKernel<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model, numAgentLocal);
-
+	
 		//2. run the cloned copy
 		//2.1. register the cloned agents to the c1loned world
+		cudaMemcpy(clonedWorldHost->allAgents,
+				agentPtrArrayUnsorted, 
+				numAgentHost * sizeof(void*), 
+				cudaMemcpyDeviceToDevice);
+
 		this->agentsBHost->cleanup(this->agentsB);
 		int numAgentsB = this->agentsBHost->numElem;
 		if (numAgentsB != 0) {
 			gSize = GRID_SIZE(numAgentsB);
 
-			cudaMemcpy(clonedWorldHost->allAgents,
-				agentPtrArrayUnsorted, 
-				numAgentHost * sizeof(void*), 
-				cudaMemcpyDeviceToDevice);
-
 			replaceOriginalWithClone<<<gSize, BLOCK_SIZE>>>(
 				clonedWorldHost->allAgents, 
 				this->agentsBHost->agentPtrArray, 
 				numAgentsB);
+
+	/*	
 
 			//2.2. sort world and worldClone
 			util::genNeighbor(this->clonedWorld, this->clonedWorldHost, modelHostParams.AGENT_NO);
@@ -266,8 +267,21 @@ public:
 			//4. clean pool again, since some agents are removed
 			this->agentsBHost->cleanup(this->agentsB);
 			
-		}
+			//4.1 demonstrate
+			//numAgentsB = this->agentsBHost->numElem;
+			//cudaMemcpy(clonedWorldHost->allAgents,
+			//	agentPtrArrayUnsorted, 
+			//	numAgentHost * sizeof(void*), 
+			//	cudaMemcpyDeviceToDevice);
 
+			//replaceOriginalWithClone<<<gSize, BLOCK_SIZE>>>(
+			//	clonedWorldHost->allAgents, 
+			//	this->agentsBHost->agentPtrArray, 
+			//	numAgentsB);
+	*/
+		}
+		
+#endif
 		//5. swap data and dataCopy
 		this->agentsAHost->swapPool();
 		this->agentsBHost->swapPool();
@@ -279,10 +293,11 @@ public:
 #endif
 
 #ifndef NDEBUG
+		fout<<"step:"<<stepCountHost<<std::endl;
 		int numAgent = this->agentsAHost->numElem;
 		cudaMemcpy(dataHost, this->agentsAHost->dataArray, sizeof(SocialForceAgentData) * numAgent, cudaMemcpyDeviceToHost);
 		for(int i = 0; i < numAgent; i ++) {
-			fout << i 
+			fout << dataHost[i].id
 				<< "\t" << dataHost[i].loc.x 
 				<< "\t" << dataHost[i].loc.y 
 				<< "\t"	<< dataHost[i].velocity.x 
@@ -295,7 +310,7 @@ public:
 		numAgent = this->agentsBHost->numElem;
 		cudaMemcpy(dataHost, this->agentsBHost->dataArray, sizeof(SocialForceAgentData) * numAgent, cudaMemcpyDeviceToHost);
 		for(int i = 0; i < numAgent; i ++) {
-			fout << i 
+			fout << dataHost[i].id 
 				<< "\t" << dataHost[i].loc.x 
 				<< "\t" << dataHost[i].loc.y 
 				<< "\t"	<< dataHost[i].velocity.x 
@@ -334,7 +349,7 @@ __device__ float correctCrossBoader(float val, float limit)
 
 class SocialForceAgent : public GAgent {
 public:
-	//GRandom *random;
+	GRandom *random;
 	SocialForceModel *myModel;
 	GWorld *myWorld;
 
@@ -343,80 +358,6 @@ public:
 	bool cloned;
 	bool cloning;
 	SocialForceAgent *myOrigin;
-
-	__device__ void init(SocialForceModel *sfModel, int dataSlot) {
-		this->myModel = sfModel;
-		this->myWorld = sfModel->world;
-		//this->random = sfModel->random;
-		this->color = colorConfigs.green;
-
-		this->cloneid.x = '0';
-		this->id = dataSlot;
-		this->cloned = false;
-		this->cloning = false;
-		this->myOrigin = NULL;
-
-		SocialForceAgentData dataLocal; //= &sfModel->agentsA->dataArray[dataSlot];
-
-		dataLocal.agentPtr = this;
-
-		//dataLocal.loc.x = (0.25 + 0.5 * this->random->uniform()) * modelDevParams.WIDTH - 0.1;
-		//dataLocal.loc.y = this->random->uniform() * modelDevParams.HEIGHT;
-
-		float sqrtNumAgent = sqrt((float)numAgent);
-		float x = (float)(dataSlot % (int)sqrtNumAgent) / sqrtNumAgent;
-		float y = (float)(dataSlot / (int)sqrtNumAgent) / sqrtNumAgent;
-
-		dataLocal.loc.x = (0.3 + x * 0.4) * modelDevParams.WIDTH;
-		dataLocal.loc.y = y * modelDevParams.HEIGHT;
-
-		dataLocal.velocity.x = 2;//4 * (this->random->uniform()-0.5);
-		dataLocal.velocity.y = 2;//4 * (this->random->uniform()-0.5);
-
-		dataLocal.v0 = 2;
-		dataLocal.mass = 50;
-
-		dataLocal.dataOrCopy = 0;
-
-		float2 goal1 = make_float2(0.25 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
-		float2 goal2 = make_float2(0.75 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
-
-		//if(length(dataLocal.loc - goal1) < length(dataLocal.loc - goal2)) 
-		//	dataLocal.goal = goal1;
-		//else
-			dataLocal.goal = goal2;
-
-		this->data = &sfModel->agentsA->dataArray[dataSlot];
-		this->dataCopy = &sfModel->agentsA->dataCopyArray[dataSlot];
-		*(SocialForceAgentData*)this->data = dataLocal;
-		dataLocal.dataOrCopy = 1;
-		*(SocialForceAgentData*)this->dataCopy = dataLocal;
-	}
-
-	__device__ void initNewClone(SocialForceAgent *agent, int dataSlot) {
-		this->myModel = agent->myModel;
-		this->myWorld = myModel->clonedWorld;
-		//this->random = agent->random;
-		this->color = colorConfigs.red;
-
-		this->cloneid.x = agent->cloneid.x + 1;
-		this->id = agent->id;
-		this->cloned = false;
-		this->cloning = false;
-		this->myOrigin = agent;
-
-		SocialForceAgentData dataLocal;
-
-		dataLocal = *(SocialForceAgentData*)agent->data;
-		this->data = &myModel->agentsB->dataArray[dataSlot];
-		dataLocal.agentPtr = this;
-		*(SocialForceAgentData*)this->data = dataLocal;
-
-		//dataLocal = *(SocialForceAgentData*)agent->dataCopy;
-		this->dataCopy = &myModel->agentsB->dataCopyArray[dataSlot];
-		dataLocal.dataOrCopy = (dataLocal.dataOrCopy + 1) % 2;
-		*(SocialForceAgentData*)this->dataCopy = dataLocal;
-	}
 
 	__device__ void computeSocialForce(const SocialForceAgentData &myData, const SocialForceAgentData &otherData, float2 &fSum){
 		float cMass = 100;
@@ -505,10 +446,11 @@ public:
 	}
 
 	__device__ void step(GModel *model){
+#ifdef _DEBUG
 		if (stepCount >= MONITOR_STEP) {
 			int idx = threadIdx.x;
 		}
-
+#endif
 		SocialForceModel *sfModel = (SocialForceModel*)model;
 		GWorld *world = this->myWorld;
 		float width = world->width;
@@ -546,10 +488,11 @@ public:
 			SocialForceAgent *otherPtr = (SocialForceAgent*)otherData->agentPtr;
 			bool otherCloned = otherPtr->cloned;
 			ds = length(otherDataLocal.loc - loc);
-			if (ds < 6 && ds > 0 )
+			if (ds < 6 && ds > 0 ) {
 				computeSocialForce(dataLocal, otherDataLocal, fSum);
-			//else if (otherCloned == true) // decision point B: impaction from neighboring agent
-			//this->cloning = true; 
+				if (otherCloned == true) // decision point B: impaction from neighboring agent
+					this->cloning = true; 
+			}
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 		}
 
@@ -639,6 +582,79 @@ public:
 		SocialForceAgentData *dataAgent = (SocialForceAgentData*)this->data;
 		*dataSmem = *dataAgent;
 	}
+
+		__device__ void init(SocialForceModel *sfModel, int dataSlot) {
+		this->myModel = sfModel;
+		this->myWorld = sfModel->world;
+#ifdef NDEBUG
+		this->random = sfModel->random;
+#endif
+		this->color = colorConfigs.green;
+
+		this->cloneid.x = '0';
+		this->id = dataSlot;
+		this->cloned = false;
+		this->cloning = false;
+		this->myOrigin = NULL;
+
+		SocialForceAgentData dataLocal; //= &sfModel->agentsA->dataArray[dataSlot];
+
+		dataLocal.agentPtr = this;
+		dataLocal.id = dataSlot;
+#ifdef NDEBUG
+		dataLocal.loc.x = (0.25 + 0.5 * this->random->uniform()) * modelDevParams.WIDTH - 0.1;
+		dataLocal.loc.y = this->random->uniform() * modelDevParams.HEIGHT;
+#else
+		float sqrtNumAgent = sqrt((float)numAgent);
+		float x = (float)(dataSlot % (int)sqrtNumAgent) / sqrtNumAgent;
+		float y = (float)(dataSlot / (int)sqrtNumAgent) / sqrtNumAgent;
+		dataLocal.loc.x = (0.3 + x * 0.4) * modelDevParams.WIDTH;
+		dataLocal.loc.y = y * modelDevParams.HEIGHT;
+#endif
+		dataLocal.velocity.x = 2;//4 * (this->random->uniform()-0.5);
+		dataLocal.velocity.y = 2;//4 * (this->random->uniform()-0.5);
+
+		dataLocal.v0 = 2;
+		dataLocal.mass = 50;
+
+
+		float2 goal1 = make_float2(0.25 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
+		float2 goal2 = make_float2(0.75 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
+#ifdef NDEBUG
+		if(length(dataLocal.loc - goal1) < length(dataLocal.loc - goal2)) 
+			dataLocal.goal = goal1;
+		else
+#endif
+			dataLocal.goal = goal2;
+
+		this->data = sfModel->agentsA->dataInSlot(dataSlot);
+		this->dataCopy = sfModel->agentsA->dataCopyInSlot(dataSlot);
+		*(SocialForceAgentData*)this->data = dataLocal;
+		*(SocialForceAgentData*)this->dataCopy = dataLocal;
+	}
+
+	__device__ void initNewClone(SocialForceAgent *agent, int dataSlot) {
+		this->myModel = agent->myModel;
+		this->myWorld = myModel->clonedWorld;
+		this->color = colorConfigs.red;
+
+		this->cloneid.x = agent->cloneid.x + 1;
+		this->id = agent->id;
+		this->cloned = false;
+		this->cloning = false;
+		this->myOrigin = agent;
+
+		SocialForceAgentData dataLocal;
+
+		dataLocal = *(SocialForceAgentData*)agent->data;
+		this->data = myModel->agentsB->dataInSlot(dataSlot);
+		dataLocal.agentPtr = this;
+		*(SocialForceAgentData*)this->data = dataLocal;
+
+		//dataLocal = *(SocialForceAgentData*)agent->dataCopy;
+		this->dataCopy = myModel->agentsB->dataCopyInSlot(dataSlot);
+		*(SocialForceAgentData*)this->dataCopy = dataLocal;
+	}
 };
 
 __device__ void SocialForceAgentData::putDataInSmem(GAgent *ag){
@@ -650,7 +666,7 @@ __global__ void addAgentsOnDevice(SocialForceModel *sfModel){
 	if (idx < numAgent){ // user init step
 		//Add agent here
 		int dataSlot = idx;
-		SocialForceAgent *ag = &sfModel->agentsA->agentArray[dataSlot];
+		SocialForceAgent *ag = sfModel->agentsA->agentInSlot(dataSlot);
 		ag->init(sfModel, dataSlot);
 		sfModel->agentsA->add(ag, dataSlot);
 
@@ -662,8 +678,11 @@ __global__ void replaceOriginalWithClone(GAgent **originalAgents, SocialForceAge
 	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
 	if (idx < numClonedAgent){
 		SocialForceAgent *ag = clonedAgents[idx];
+#ifdef _DEBUG
 		if (stepCount >= MONITOR_STEP) {
-			int idx = threadIdx.x;	}
+			int idx = threadIdx.x;	
+		}
+#endif
 		originalAgents[ag->id] = ag;
 	}
 }
@@ -675,10 +694,12 @@ __global__ void cloneKernel(SocialForceModel *sfModel, int numAgentLocal)
 		SocialForceAgent *ag = &sfModel->agentsA->agentArray[idx];
 		AgentPool<SocialForceAgent, SocialForceAgentData> *agentsB = sfModel->agentsB;
 
+#ifdef _DEBUG
 		if (stepCount >= MONITOR_STEP) {
 			int aidx = threadIdx.x;
 			agentsB->numElem = agentsB->numElem;
 		}
+#endif
 
 		if( ag->cloning == true && ag->cloned == false) {
 
@@ -688,15 +709,17 @@ __global__ void cloneKernel(SocialForceModel *sfModel, int numAgentLocal)
 			int agentSlot = agentsB->agentSlot();
 			int dataSlot = agentsB->dataSlot(agentSlot);
 
-			SocialForceAgent *ag2 = &agentsB->agentArray[dataSlot];
+			SocialForceAgent *ag2 = agentsB->agentInSlot(dataSlot);
 			ag2->initNewClone(ag, dataSlot);
 			agentsB->add(ag2, agentSlot);
 		}
 
+#ifdef _DEBUG
 		if (stepCount >= MONITOR_STEP) {
 			int aidx = threadIdx.x;
 			agentsB->numElem = agentsB->numElem;
 		}
+#endif
 	}
 }
 
@@ -711,10 +734,11 @@ __global__ void compareOriginAndClone(
 		SocialForceAgentData clonedAgData = *(SocialForceAgentData*) clonedAg->dataCopy;
 		SocialForceAgent *originalAg = clonedAg->myOrigin;
 		SocialForceAgentData originalAgData = *(SocialForceAgentData*) originalAg->dataCopy;
-
+#ifdef _DEBUG
 		if (stepCount >= MONITOR_STEP) {
 			int aidx = threadIdx.x;
 		}
+#endif
 
 		bool match;
 		//compare equivalence of two copies of data;
@@ -729,10 +753,14 @@ __global__ void compareOriginAndClone(
 			clonedPool->remove(idx);
 			originalAg->cloned = false;
 			originalAg->cloning = false;
-			printf("%d and %d match \n", originalAg->id, clonedAg->id);
-		} else {
-			printf("%d and %d not match \n", originalAg->id, clonedAg->id);
+#ifdef CLONE
 		}
+#else
+			printf("%d: %d and %d match \n", stepCount, originalAg->id, clonedAg->id);
+		} else {
+			printf("%d: %d and %d not match \n", stepCount, originalAg->id, clonedAg->id);
+		}
+#endif
 	}
 }
 
