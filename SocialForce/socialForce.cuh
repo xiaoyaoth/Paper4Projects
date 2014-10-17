@@ -100,11 +100,12 @@ __constant__ obstacleLine gateTwoA[2];
 __constant__ obstacleLine gateTwoB[2];
 __constant__ obstacleLine holeB;
 #define GATE_LINE_NUM 2
-#define GATE_SIZE_A 20
+#define GATE_SIZE_A 2
 #define GATE_SIZE_B 20
 
 #define MONITOR_STEP 75
 #define CLONE
+//#define CLONE_COMPARE
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
 
@@ -252,9 +253,7 @@ public:
 				clonedWorldHost->allAgents, 
 				this->agentsBHost->agentPtrArray, 
 				numAgentsB);
-
-	/*	
-
+	
 			//2.2. sort world and worldClone
 			util::genNeighbor(this->clonedWorld, this->clonedWorldHost, modelHostParams.AGENT_NO);
 
@@ -263,10 +262,11 @@ public:
 
 			//3. double check
 			compareOriginAndClone<<<gSize, BLOCK_SIZE>>>(this->agentsB, clonedWorld, numAgentsB);
-
+#ifdef CLONE_COMPARE
 			//4. clean pool again, since some agents are removed
 			this->agentsBHost->cleanup(this->agentsB);
-			
+#endif
+/*			
 			//4.1 demonstrate
 			//numAgentsB = this->agentsBHost->numElem;
 			//cudaMemcpy(clonedWorldHost->allAgents,
@@ -633,20 +633,20 @@ public:
 		*(SocialForceAgentData*)this->dataCopy = dataLocal;
 	}
 
-	__device__ void initNewClone(SocialForceAgent *agent, int dataSlot) {
-		this->myModel = agent->myModel;
+	__device__ void initNewClone(const SocialForceAgent &agent, SocialForceAgent *originPtr, int dataSlot) {
+		this->myModel = agent.myModel;
 		this->myWorld = myModel->clonedWorld;
 		this->color = colorConfigs.red;
 
-		this->cloneid.x = agent->cloneid.x + 1;
-		this->id = agent->id;
+		this->cloneid.x = agent.cloneid.x + 1;
+		this->id = agent.id;
 		this->cloned = false;
 		this->cloning = false;
-		this->myOrigin = agent;
+		this->myOrigin = originPtr;
 
 		SocialForceAgentData dataLocal;
 
-		dataLocal = *(SocialForceAgentData*)agent->data;
+		dataLocal = *(SocialForceAgentData*)agent.data;
 		this->data = myModel->agentsB->dataInSlot(dataSlot);
 		dataLocal.agentPtr = this;
 		*(SocialForceAgentData*)this->data = dataLocal;
@@ -673,53 +673,35 @@ __global__ void addAgentsOnDevice(SocialForceModel *sfModel){
 	}
 }
 
-__global__ void replaceOriginalWithClone(GAgent **originalAgents, SocialForceAgent **clonedAgents, int numClonedAgent)
-{
-	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
-	if (idx < numClonedAgent){
-		SocialForceAgent *ag = clonedAgents[idx];
-#ifdef _DEBUG
-		if (stepCount >= MONITOR_STEP) {
-			int idx = threadIdx.x;	
-		}
-#endif
-		originalAgents[ag->id] = ag;
-	}
-}
-
 __global__ void cloneKernel(SocialForceModel *sfModel, int numAgentLocal) 
 {
 	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
 	if (idx < numAgentLocal){ // user init step
-		SocialForceAgent *ag = &sfModel->agentsA->agentArray[idx];
+		SocialForceAgent ag, *agPtr = &sfModel->agentsA->agentArray[idx];
+		ag = *agPtr;
 		AgentPool<SocialForceAgent, SocialForceAgentData> *agentsB = sfModel->agentsB;
 
-#ifdef _DEBUG
-		if (stepCount >= MONITOR_STEP) {
-			int aidx = threadIdx.x;
-			agentsB->numElem = agentsB->numElem;
-		}
-#endif
-
-		if( ag->cloning == true && ag->cloned == false) {
-
-			ag->cloned = true;
-			ag->cloning = false;
+		if( ag.cloning == true && ag.cloned == false) {
+			ag.cloned = true;
+			ag.cloning = false;
+			*agPtr = ag;
 
 			int agentSlot = agentsB->agentSlot();
 			int dataSlot = agentsB->dataSlot(agentSlot);
 
 			SocialForceAgent *ag2 = agentsB->agentInSlot(dataSlot);
-			ag2->initNewClone(ag, dataSlot);
+			ag2->initNewClone(ag, agPtr, dataSlot);
 			agentsB->add(ag2, agentSlot);
 		}
+	}
+}
 
-#ifdef _DEBUG
-		if (stepCount >= MONITOR_STEP) {
-			int aidx = threadIdx.x;
-			agentsB->numElem = agentsB->numElem;
-		}
-#endif
+__global__ void replaceOriginalWithClone(GAgent **originalAgents, SocialForceAgent **clonedAgents, int numClonedAgent)
+{
+	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
+	if (idx < numClonedAgent){
+		SocialForceAgent *ag = clonedAgents[idx];
+		originalAgents[ag->id] = ag;
 	}
 }
 
@@ -734,11 +716,6 @@ __global__ void compareOriginAndClone(
 		SocialForceAgentData clonedAgData = *(SocialForceAgentData*) clonedAg->dataCopy;
 		SocialForceAgent *originalAg = clonedAg->myOrigin;
 		SocialForceAgentData originalAgData = *(SocialForceAgentData*) originalAg->dataCopy;
-#ifdef _DEBUG
-		if (stepCount >= MONITOR_STEP) {
-			int aidx = threadIdx.x;
-		}
-#endif
 
 		bool match;
 		//compare equivalence of two copies of data;
