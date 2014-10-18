@@ -100,8 +100,8 @@ __constant__ obstacleLine gateTwoA[2];
 __constant__ obstacleLine gateTwoB[2];
 __constant__ obstacleLine holeB;
 
-__device__ uint throughput;
-int throughputHost;
+//__device__ uint throughput;
+//int throughputHost;
 //std::fstream fout;
 //char *outfname;
 
@@ -112,7 +112,8 @@ int throughputHost;
 
 #define MONITOR_STEP 75
 #define CLONE
-//#define CLONE_COMPARE
+#define CLONE_COMPARE
+#define CLONE_PERCENT 0.5
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
 
@@ -149,6 +150,8 @@ public:
 		int num = atoi(modelArgs[0]);
 		//outfname = new char[30];
 		//sprintf(outfname, modelArgs[1]);
+		//fout.open(outfname, std::ios::out);
+
 		numAgentHost = num;
 		cudaMemcpyToSymbol(numAgent, &num, sizeof(int));
 
@@ -199,7 +202,6 @@ public:
 
 	__host__ void start()
 	{
-		//fout.open(outfname, std::ios::out);
 		
 #if defined(_DEBUG) && defined(CLONE)
 		//alloc debug output
@@ -282,24 +284,25 @@ public:
 			//2.3. step the cloned copy
 			this->agentsBHost->stepPoolAgent(this->model);
 
+#ifdef CLONE_COMPARE
 			//3. double check
 			compareOriginAndClone<<<gSize, BLOCK_SIZE>>>(this->agentsB, clonedWorld, numAgentsB);
-#ifdef CLONE_COMPARE
-			//4. clean pool again, since some agents are removed
-			this->agentsBHost->cleanup(this->agentsB);
+
 #endif
 /*			
+			//4. clean pool again, since some agents are removed
+			this->agentsBHost->cleanup(this->agentsB);
 			//4.1 demonstrate
-			//numAgentsB = this->agentsBHost->numElem;
-			//cudaMemcpy(clonedWorldHost->allAgents,
-			//	agentPtrArrayUnsorted, 
-			//	numAgentHost * sizeof(void*), 
-			//	cudaMemcpyDeviceToDevice);
+			numAgentsB = this->agentsBHost->numElem;
+			cudaMemcpy(clonedWorldHost->allAgents,
+				agentPtrArrayUnsorted, 
+				numAgentHost * sizeof(void*), 
+				cudaMemcpyDeviceToDevice);
 
-			//replaceOriginalWithClone<<<gSize, BLOCK_SIZE>>>(
-			//	clonedWorldHost->allAgents, 
-			//	this->agentsBHost->agentPtrArray, 
-			//	numAgentsB);
+			replaceOriginalWithClone<<<gSize, BLOCK_SIZE>>>(
+				clonedWorldHost->allAgents, 
+				this->agentsBHost->agentPtrArray, 
+				numAgentsB);
 	*/
 		}
 		
@@ -618,7 +621,7 @@ public:
 			&& (newLoc.y - mass/cMass < 0.5 * modelDevParams.HEIGHT + rightGateSize)) 
 		{
 			newGoal.x = modelDevParams.WIDTH;
-			//if (goalTemp != newGoal.x && this->cloneid.x == '0') 
+			//if (goalTemp != newGoal.x && this->cloneid.x != '0') 
 			//	atomicInc(&throughput, 8192);
 		}
 
@@ -673,7 +676,7 @@ public:
 		float2 goal1 = make_float2(0.25 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
 		float2 goal2 = make_float2(0.75 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
 #ifdef NDEBUG
-		if(length(dataLocal.loc - goal1) < length(dataLocal.loc - goal2)) 
+		if(dataLocal.loc.x < (0.75 - 0.5 * CLONE_PERCENT) * modelDevParams.WIDTH) 
 			dataLocal.goal = goal1;
 		else
 #endif
