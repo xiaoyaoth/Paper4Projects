@@ -136,8 +136,9 @@ public:
 	SocialForceAgentData *dataHost;
 	std::fstream fout;
 
-	__host__ SocialForceModel(int num) {
+	__host__ SocialForceModel(char **argv) {
 
+		int num = atoi(argv[0]);
 		numAgentHost = num;
 		cudaMemcpyToSymbol(numAgent, &num, sizeof(int));
 
