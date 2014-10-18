@@ -102,6 +102,8 @@ __constant__ obstacleLine holeB;
 
 __device__ uint throughput;
 int throughputHost;
+//std::fstream fout;
+//char *outfname;
 
 #define GATE_LINE_NUM 2
 #define LEFT_GATE_SIZE 2
@@ -133,8 +135,6 @@ public:
 	cudaEvent_t timerStart, timerStop;
 
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agentsA, *agentsAHost;
-	std::fstream fout;
-	char *outfname;
 
 #ifdef CLONE
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agentsB, *agentsBHost;
@@ -147,8 +147,8 @@ public:
 
 	__host__ SocialForceModel(char **modelArgs) {
 		int num = atoi(modelArgs[0]);
-		outfname = new char[30];
-		sprintf(outfname, modelArgs[1]);
+		//outfname = new char[30];
+		//sprintf(outfname, modelArgs[1]);
 		numAgentHost = num;
 		cudaMemcpyToSymbol(numAgent, &num, sizeof(int));
 
@@ -199,15 +199,15 @@ public:
 
 	__host__ void start()
 	{
-		fout.open(outfname, std::ios::out);
+		//fout.open(outfname, std::ios::out);
 		
 #if defined(_DEBUG) && defined(CLONE)
 		//alloc debug output
 		dataHost = (SocialForceAgentData*)malloc(sizeof(SocialForceAgentData) * this->agentsAHost->numElem);
 #endif
 
-		throughputHost = 0;
-		cudaMemcpyToSymbol(throughput, &throughputHost, sizeof(int));
+		//throughputHost = 0;
+		//cudaMemcpyToSymbol(throughput, &throughputHost, sizeof(int));
 
 		int AGENT_NO = this->agentsAHost->numElem;
 		int gSize = GRID_SIZE(AGENT_NO);
@@ -231,9 +231,9 @@ public:
 	__host__ void preStep()
 	{
 
-		cudaMemcpyFromSymbol(&throughputHost, throughput, sizeof(int));
-		fout<<throughputHost<<std::endl;
-		fout.flush();
+		//cudaMemcpyFromSymbol(&throughputHost, throughput, sizeof(int));
+		//fout<<throughputHost<<std::endl;
+		//fout.flush();
 
 #ifdef _WIN32
 		if (GSimVisual::clicks % 2 == 0)
@@ -348,7 +348,7 @@ public:
 
 	__host__ void stop()
 	{
-		fout.close();
+		//fout.close();
 
 		float time;
 		cudaDeviceSynchronize();
