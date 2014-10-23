@@ -107,11 +107,11 @@ __constant__ obstacleLine holeB;
 
 #define GATE_LINE_NUM 2
 #define LEFT_GATE_SIZE 2
-#define RIGHT_GATE_SIZE_A 2
+#define RIGHT_GATE_SIZE_A 20
 #define RIGHT_GATE_SIZE_B 20
 
 #define MONITOR_STEP 75
-#define CLONE
+//#define CLONE
 #define CLONE_COMPARE
 #define CLONE_PERCENT 0.5
 
