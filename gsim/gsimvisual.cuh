@@ -103,7 +103,7 @@ public:
 		getLastCudaError("cudaGraphicsMapResources");
 		cudaGraphicsResourceGetMappedPointer( (void**)&devPtr, &size, vis.resource);
 		getLastCudaError("cudaGraphicsResourceGetMappedPointer");
-		cudaMemset(devPtr, 0, size);
+		cudaMemset(devPtr, 0xff, size);
 		getLastCudaError("cudaMemset");
 
 		glEnable(GL_TEXTURE_2D);

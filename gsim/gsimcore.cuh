@@ -56,20 +56,6 @@ namespace agentPoolUtil{
 	}
 	/*kernel func: numElem = numElem + incCount - decCount; no need to be called*/
 	template<class Agent, class AgentData> 
-	__global__ void cleanupDevice(AgentPool<Agent, AgentData> *pDev)
-	{
-		int idx = threadIdx.x + blockIdx.x * blockDim.x;
-		if (idx < pDev->numElemMax) {
-			bool del = pDev->delMark[idx];
-			Agent *o = pDev->agentPtrArray[idx];
-			if (del == true && o != NULL) 
-			{
-				delete o;
-				pDev->agentPtrArray[idx] = NULL;
-			}
-		}
-	}
-	template<class Agent, class AgentData> 
 	__global__ void genHash(AgentPool<Agent, AgentData> *pDev, int *hash) {
 		int idx = threadIdx.x + blockIdx.x * blockDim.x;
 		if (idx < pDev->numElemMax) {
@@ -871,10 +857,10 @@ template<class SharedMemoryData> void init(char *configFile)
 	printf("SharedMemoryData size: %d, Per block shared memory size: %d\n", sizeof(SharedMemoryData), sizeOfSmem);
 
 	agentColor colorHost;
-	colorHost.blue	=	make_uchar4(0, 0, 255, 0);
-	colorHost.green =	make_uchar4(0, 255, 0, 255);
-	colorHost.red	=	make_uchar4(255, 0, 0, 0);
-	colorHost.yellow =	make_uchar4(255, 255, 0, 0);
+	colorHost.blue	=	make_uchar4(0, 0, 128, 0);
+	colorHost.green =	make_uchar4(0, 128, 0, 128);
+	colorHost.red	=	make_uchar4(128, 0, 0, 0);
+	colorHost.yellow =	make_uchar4(128, 128, 0, 0);
 	colorHost.white	=	make_uchar4(255, 255, 255, 0);
 	colorHost.black =	make_uchar4(0, 0, 0, 0);
 	cudaMemcpyToSymbol(colorConfigs, &colorHost, sizeof(agentColor));
@@ -932,7 +918,7 @@ void doLoop(GModel *mHost){
 
 	for (; stepCountHost<STEPS; stepCountHost++){
 		//if ((i%(STEPS/100))==0) 
-		printf("STEP:%d ", stepCountHost);
+		//printf("STEP:%d ", stepCountHost);
 		cudaMemcpyToSymbol(stepCount, &stepCountHost, sizeof(int));
 		cudaEventRecord(start, 0);
 
