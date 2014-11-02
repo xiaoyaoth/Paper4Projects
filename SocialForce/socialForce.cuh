@@ -103,6 +103,11 @@ __device__ uint throughput;
 int throughputHost;
 //std::fstream fout;
 //char *outfname;
+#ifdef _DEBUG
+	SocialForceAgentData *dataHost;
+	SocialForceAgentData *dataCopyHost;
+	int *dataIdxArrayHost;
+#endif
 
 #define GATE_LINE_NUM 2
 #define LEFT_GATE_SIZE 2
@@ -116,25 +121,38 @@ int throughputHost;
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
 
-__global__ void replaceOriginalWithClone(
-	GAgent **originalAgents, 
-	SocialForceAgent **clonedAgents, 
-	int numClonedAgent);
+__global__ void replaceOriginalWithClone(GAgent **originalAgents, SocialForceAgent **clonedAgents, int numClonedAgent);
 
-__global__ void cloneKernel(SocialForceModel *sfModel, 
-							int numAgentLocal);
+__global__ void cloneKernel(SocialForceAgent **originalAgents, AgentPool<SocialForceAgent, SocialForceAgentData> *pool, int numAgentLocal, GWorld *world);
 
-__global__ void compareOriginAndClone(
-	AgentPool<SocialForceAgent, SocialForceAgentData> *clonedPool,
-	GWorld *clonedWorld,
-	int numClonedAgents) ;
+__global__ void compareOriginAndClone(AgentPool<SocialForceAgent, SocialForceAgentData> *clonedPool, GWorld *clonedWorld, int numClonedAgents) ;
 
+#ifdef CLONE
 class SocialForceClone {
+public:
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agents, *agentsHost;
 	GWorld *clonedWorld, *clonedWorldHost;
 	SocialForceAgent **agentPtrArrayUnsorted;
-};
 
+	__host__ SocialForceClone(int num) {
+		agentsHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(0, num, sizeof(SocialForceAgentData));
+		util::hostAllocCopyToDevice<AgentPool<SocialForceAgent, SocialForceAgentData> >(agentsHost, &agents);
+		
+		clonedWorldHost = new GWorld();
+		util::hostAllocCopyToDevice<GWorld>(clonedWorldHost, &clonedWorld);
+
+		//alloc untouched agent array
+		cudaMalloc((void**)&agentPtrArrayUnsorted, num * sizeof(SocialForceAgent*) );
+	}
+
+	__host__ void start(SocialForceAgent** originalAgents, int num) {
+		//copy the init agents to untouched agent list
+		cudaMemcpy(agentPtrArrayUnsorted, originalAgents, num * sizeof(SocialForceAgent*), cudaMemcpyDeviceToDevice);
+	}
+
+	__host__ void step(SocialForceAgent** originalAgents, int num, SocialForceModel *modelHost);
+};
+#endif
 class SocialForceModel : public GModel {
 public:
 	GRandom *random, *randomHost;
@@ -142,19 +160,10 @@ public:
 
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agentsA, *agentsAHost;
 
-#ifdef CLONE
-	AgentPool<SocialForceAgent, SocialForceAgentData> *agentsB, *agentsBHost;
-	GWorld *clonedWorld, *clonedWorldHost;
-	SocialForceAgent **agentPtrArrayUnsorted;
-#endif
-
-#ifdef _DEBUG
-	SocialForceAgentData *dataHost;
-	SocialForceAgentData *dataCopyHost;
-	int *dataIdxArrayHost;
-#endif
-
 	std::fstream fout;
+#ifdef CLONE
+	SocialForceClone *cloneBHost;
+#endif
 
 	__host__ SocialForceModel(char **modelArgs) {
 		int num = atoi(modelArgs[0]);
@@ -198,52 +207,40 @@ public:
 		agentsAHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(numAgentHost, numAgentHost, sizeof(SocialForceAgentData));
 		util::hostAllocCopyToDevice<AgentPool<SocialForceAgent, SocialForceAgentData> >(agentsAHost, &agentsA);
 
-#ifdef CLONE
-		agentsBHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(0, numAgentHost, sizeof(SocialForceAgentData));
-		util::hostAllocCopyToDevice<AgentPool<SocialForceAgent, SocialForceAgentData> >(agentsBHost, &agentsB);
-#endif
 		//init world
 		worldHost = new GWorld();
 		util::hostAllocCopyToDevice<GWorld>(worldHost, &world);
 
-#ifdef CLONE
-		clonedWorldHost = new GWorld();
-		util::hostAllocCopyToDevice<GWorld>(clonedWorldHost, &clonedWorld);
-
-		//alloc untouched agent array
-		cudaMalloc((void**)&agentPtrArrayUnsorted, num * sizeof(SocialForceAgent*) );
-#endif
-
 		//init utility
 		randomHost = new GRandom(modelHostParams.MAX_AGENT_NO);
 		util::hostAllocCopyToDevice<GRandom>(randomHost, &random);
+
+#ifdef CLONE
+		//init clone
+		cloneBHost = new SocialForceClone(numAgentHost);
+#endif
 
 		util::hostAllocCopyToDevice<SocialForceModel>(this, (SocialForceModel**)&this->model);
 	}
 
 	__host__ void start()
 	{
-
+		int numAgentLocal = this->agentsAHost->numElem;
 #if defined(_DEBUG)
 		//alloc debug output
-		int numAgent = this->agentsAHost->numElem;
-		dataHost = (SocialForceAgentData*)malloc(sizeof(SocialForceAgentData) * numAgent);
-		dataCopyHost = (SocialForceAgentData*)malloc(sizeof(SocialForceAgentData) * numAgent);
-		dataIdxArrayHost = new int[numAgent];
+		dataHost = (SocialForceAgentData*)malloc(sizeof(SocialForceAgentData) * numAgentLocal);
+		dataCopyHost = (SocialForceAgentData*)malloc(sizeof(SocialForceAgentData) * numAgentLocal);
+		dataIdxArrayHost = new int[numAgentLocal];
 #else
 		throughputHost = 0;
 		cudaMemcpyToSymbol(throughput, &throughputHost, sizeof(int));
 #endif
 
-		int AGENT_NO = this->agentsAHost->numElem;
-		int gSize = GRID_SIZE(AGENT_NO);
+		int gSize = GRID_SIZE(numAgentLocal);
 		addAgentsOnDevice<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model);
+
 #ifdef CLONE
-		//copy the init agents to untouched agent list
-		cudaMemcpy(agentPtrArrayUnsorted, 
-			this->agentsAHost->agentPtrArray, 
-			AGENT_NO * sizeof(SocialForceAgent*), 
-			cudaMemcpyDeviceToDevice);
+		this->cloneBHost->start(this->agentsAHost->agentPtrArray, numAgentLocal);
 #endif
 
 #ifdef _WIN32
@@ -262,7 +259,7 @@ public:
 			GSimVisual::getInstance().setWorld(this->world);
 #ifdef CLONE
 		else
-			GSimVisual::getInstance().setWorld(this->clonedWorld);
+			GSimVisual::getInstance().setWorld(this->cloneBHost->clonedWorld);
 #endif
 #endif
 		getLastCudaError("copyHostToDevice");
@@ -275,60 +272,8 @@ public:
 		util::genNeighbor(this->world, this->worldHost, this->agentsAHost->numElem);
 		cudaMemcpyToSymbol(modelDevParams, &modelHostParams, sizeof(modelConstants));
 		this->agentsAHost->stepPoolAgent(this->model);
-
-#ifdef CLONE	
-		//1.1 clone agents
-		int numAgentLocal = this->agentsAHost->numElem;
-		int gSize = GRID_SIZE(numAgentLocal);
-		cloneKernel<<<gSize, BLOCK_SIZE>>>((SocialForceModel*)this->model, numAgentLocal);
-
-		//2. run the cloned copy
-		//2.1. register the cloned agents to the c1loned world
-		cudaMemcpy(clonedWorldHost->allAgents,
-			agentPtrArrayUnsorted, 
-			numAgentHost * sizeof(void*), 
-			cudaMemcpyDeviceToDevice);
-
-		this->agentsBHost->cleanup(this->agentsB);
-		int numAgentsB = this->agentsBHost->numElem;
-		if (numAgentsB != 0) {
-			gSize = GRID_SIZE(numAgentsB);
-
-			replaceOriginalWithClone<<<gSize, BLOCK_SIZE>>>(
-				clonedWorldHost->allAgents, 
-				this->agentsBHost->agentPtrArray, 
-				numAgentsB);
-
-			//2.2. sort world and worldClone
-			util::genNeighbor(this->clonedWorld, this->clonedWorldHost, modelHostParams.AGENT_NO);
-
-			//2.3. step the cloned copy
-			this->agentsBHost->stepPoolAgent(this->model);
-
-#ifdef CLONE_COMPARE
-			//3. double check
-			compareOriginAndClone<<<gSize, BLOCK_SIZE>>>(this->agentsB, clonedWorld, numAgentsB);
-
-			//4. clean pool again, since some agents are removed
-			this->agentsBHost->cleanup(this->agentsB);
-#endif
-
-#ifdef _DEBUG
-
-			//4.1 demonstrate
-			//numAgentsB = this->agentsBHost->numElem;
-			//cudaMemcpy(clonedWorldHost->allAgents,
-			//	agentPtrArrayUnsorted, 
-			//	numAgentHost * sizeof(void*), 
-			//	cudaMemcpyDeviceToDevice);
-
-			//replaceOriginalWithClone<<<gSize, BLOCK_SIZE>>>(
-			//	clonedWorldHost->allAgents, 
-			//	this->agentsBHost->agentPtrArray, 
-			//	numAgentsB);
-#endif
-		}
-
+#ifdef CLONE
+		cloneBHost->step(this->agentsAHost->agentPtrArray, numAgentHost, this);
 #endif
 
 #if defined(_DEBUG)
@@ -357,19 +302,20 @@ public:
 				fout.flush();
 			}
 			fout <<"-------------------"<<std::endl;
+
 #if defined(CLONE)
-			numElemMaxHost = this->agentsBHost->numElemMax;
-			numElemHost = this->agentsBHost->numElem;
+			numElemMaxHost = this->cloneBHost->agentsHost->numElemMax;
+			numElemHost = this->cloneBHost->agentsHost->numElem;
 			std::cout<<" "<<numElemHost<<std::endl;
 			if (stepCountHost % 2 == 0) {
-				cudaMemcpy(dataHost, this->agentsBHost->dataCopyArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
-				cudaMemcpy(dataCopyHost, this->agentsBHost->dataArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataHost, this->cloneBHost->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataCopyHost, this->cloneBHost->agentsHost->dataArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
 			} else {
-				cudaMemcpy(dataHost, this->agentsBHost->dataArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
-				cudaMemcpy(dataCopyHost, this->agentsBHost->dataCopyArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataHost, this->cloneBHost->agentsHost->dataArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataCopyHost, this->cloneBHost->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
 			}
 
-			cudaMemcpy(dataIdxArrayHost, this->agentsBHost->dataIdxArray, sizeof(int) * numElemMaxHost, cudaMemcpyDeviceToHost);
+			cudaMemcpy(dataIdxArrayHost, this->cloneBHost->agentsHost->dataIdxArray, sizeof(int) * numElemMaxHost, cudaMemcpyDeviceToHost);
 
 			for(int i = 0; i < numElemHost; i ++) {
 				int dataIdx = dataIdxArrayHost[i];
@@ -395,6 +341,7 @@ public:
 			fout <<"==================="<<std::endl<<std::endl;
 			fout.flush();
 #endif
+
 #else
 		cudaMemcpyFromSymbol(&throughputHost, throughput, sizeof(int));
 		fout<<throughputHost<<std::endl;
@@ -404,9 +351,9 @@ public:
 		//5. swap data and dataCopy
 		this->agentsAHost->swapPool();
 #ifdef CLONE
-		this->agentsBHost->swapPool();
+		this->cloneBHost->agentsHost->swapPool();
 #endif
-		getLastCudaError("preStep");
+		getLastCudaError("step");
 
 #ifdef _WIN32
 		GSimVisual::getInstance().animate();
@@ -430,6 +377,51 @@ public:
 	}
 };
 
+#ifdef CLONE
+__host__ void SocialForceClone::step(SocialForceAgent** originalAgents, int num, SocialForceModel *modelHost) {
+
+	//1.1 clone agents
+	int numAgentLocal = num;
+	int gSize = GRID_SIZE(numAgentLocal);
+	cloneKernel<<<gSize, BLOCK_SIZE>>>(originalAgents, agents, numAgentLocal, clonedWorld);
+
+	//2. run the cloned copy
+	//2.1. register the cloned agents to the c1loned world
+	cudaMemcpy(clonedWorldHost->allAgents,
+		agentPtrArrayUnsorted, 
+		numAgentHost * sizeof(void*), 
+		cudaMemcpyDeviceToDevice);
+
+	this->agentsHost->cleanup(this->agents);
+	int numAgentsB = this->agentsHost->numElem;
+	if (numAgentsB != 0) {
+		gSize = GRID_SIZE(numAgentsB);
+
+		replaceOriginalWithClone<<<gSize, BLOCK_SIZE>>>(
+			clonedWorldHost->allAgents, 
+			this->agentsHost->agentPtrArray, 
+			numAgentsB);
+
+		//2.2. sort world and worldClone
+		util::genNeighbor(this->clonedWorld, this->clonedWorldHost, modelHostParams.AGENT_NO);
+
+		//2.3. step the cloned copy
+		this->agentsHost->stepPoolAgent(modelHost->model);
+
+#ifdef CLONE_COMPARE
+		//3. double check
+		compareOriginAndClone<<<gSize, BLOCK_SIZE>>>(this->agents, clonedWorld, numAgentsB);
+
+		//4. clean pool again, since some agents are removed
+		this->agentsHost->cleanup(this->agents);
+#endif
+
+		getLastCudaError("step:clone");
+	}
+
+}
+#endif
+
 __device__ float correctCrossBoader(float val, float limit)
 {
 	if (val > limit)
@@ -442,7 +434,6 @@ __device__ float correctCrossBoader(float val, float limit)
 class SocialForceAgent : public GAgent {
 public:
 	GRandom *random;
-	SocialForceModel *myModel;
 	GWorld *myWorld;
 
 	int id;
@@ -652,6 +643,12 @@ public:
 			&& (newLoc.y - mass/cMass < 0.5 * modelDevParams.HEIGHT + gateSize)) 
 		{
 			newGoal.x = modelDevParams.WIDTH;
+#ifdef CLONE
+			if (goalTemp != newGoal.x && this->cloneid != 0) 
+#else
+			if (goalTemp != newGoal.x) 	
+#endif
+				atomicInc(&throughput, 8192);
 		}
 
 		newLoc.x = correctCrossBoader(newLoc.x, modelDevParams.WIDTH);
@@ -667,7 +664,6 @@ public:
 	}
 
 	__device__ void init(SocialForceModel *sfModel, int dataSlot) {
-		this->myModel = sfModel;
 		this->myWorld = sfModel->world;
 #ifdef NDEBUG
 		this->random = sfModel->random;
@@ -726,9 +722,9 @@ public:
 	}
 
 #ifdef CLONE
-	__device__ void initNewClone(const SocialForceAgent &agent, SocialForceAgent *originPtr, int dataSlot) {
-		this->myModel = agent.myModel;
-		this->myWorld = myModel->clonedWorld;
+	__device__ void initNewClone(const SocialForceAgent &agent, SocialForceAgent *originPtr, int dataSlot, GWorld *clonedWorld,
+		AgentPool<SocialForceAgent, SocialForceAgentData> *pool) {
+		this->myWorld = clonedWorld;
 		this->color = colorConfigs.red;
 
 		this->cloneid = agent.cloneid + 1;
@@ -748,11 +744,11 @@ public:
 		dataCopyLocal.agentPtr = this;
 
 		if (stepCount % 2 == 0) {
-			this->data = myModel->agentsB->dataInSlot(dataSlot);
-			this->dataCopy = myModel->agentsB->dataCopyInSlot(dataSlot);
+			this->data = pool->dataInSlot(dataSlot);
+			this->dataCopy = pool->dataCopyInSlot(dataSlot);
 		} else {
-			this->data = myModel->agentsB->dataCopyInSlot(dataSlot);
-			this->dataCopy = myModel->agentsB->dataInSlot(dataSlot);
+			this->data = pool->dataCopyInSlot(dataSlot);
+			this->dataCopy = pool->dataInSlot(dataSlot);
 		}
 
 		*(SocialForceAgentData*)this->data = dataLocal;
@@ -778,25 +774,24 @@ __global__ void addAgentsOnDevice(SocialForceModel *sfModel){
 }
 
 #ifdef CLONE
-__global__ void cloneKernel(SocialForceModel *sfModel, int numAgentLocal) 
+__global__ void cloneKernel(SocialForceAgent **originalAgents, AgentPool<SocialForceAgent, SocialForceAgentData> *pool, int numAgentLocal, GWorld *world)
 {
 	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
 	if (idx < numAgentLocal){ // user init step
-		SocialForceAgent ag, *agPtr = &sfModel->agentsA->agentArray[idx];
+		SocialForceAgent ag, *agPtr = originalAgents[idx];
 		ag = *agPtr;
-		AgentPool<SocialForceAgent, SocialForceAgentData> *agentsB = sfModel->agentsB;
 
 		if( ag.cloning == true && ag.cloned == false) {
 			ag.cloned = true;
 			ag.cloning = false;
 			*agPtr = ag;
 
-			int agentSlot = agentsB->agentSlot();
-			int dataSlot = agentsB->dataSlot(agentSlot);
+			int agentSlot = pool->agentSlot();
+			int dataSlot = pool->dataSlot(agentSlot);
 
-			SocialForceAgent *ag2 = agentsB->agentInSlot(dataSlot);
-			ag2->initNewClone(ag, agPtr, dataSlot);
-			agentsB->add(ag2, agentSlot);
+			SocialForceAgent *ag2 = pool->agentInSlot(dataSlot);
+			ag2->initNewClone(ag, agPtr, dataSlot, world, pool);
+			pool->add(ag2, agentSlot);
 		}
 	}
 }
