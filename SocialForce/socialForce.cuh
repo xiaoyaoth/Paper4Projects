@@ -92,7 +92,7 @@ struct obstacleLine
 #define k2 (2.4 * 100000)
 #define	maxv 3
 
-#define NUM_CLONE 2
+#define NUM_CLONE 1
 #define NUM_WALLS 6
 __constant__ int numAgent;
 __constant__ obstacleLine holeB;
@@ -124,7 +124,7 @@ __global__ void replaceOriginalWithClone(GAgent **originalAgents, SocialForceAge
 
 __global__ void cloneKernel(SocialForceAgent **originalAgents, AgentPool<SocialForceAgent, SocialForceAgentData> *pool, int numAgentLocal, GWorld *world, int cloneid);
 
-__global__ void compareOriginAndClone(AgentPool<SocialForceAgent, SocialForceAgentData> *clonedPool, GWorld *clonedWorld, int numClonedAgents) ;
+__global__ void compareOriginAndClone(AgentPool<SocialForceAgent, SocialForceAgentData> *clonedPool, GWorld *clonedWorld, int numClonedAgents, int cloneid) ;
 
 #ifdef CLONE
 class SocialForceClone {
@@ -265,11 +265,12 @@ public:
 	__host__ void preStep()
 	{
 		//switch world
+		int numInst = NUM_CLONE + 1;
 #ifdef _WIN32
-		if (GSimVisual::clicks % NUM_CLONE == 0)
+		if (GSimVisual::clicks % numInst == 0)
 			GSimVisual::getInstance().setWorld(this->world);
 #ifdef CLONE
-		else if (GSimVisual:: clicks % NUM_CLONE == 1)
+		else if (GSimVisual:: clicks % numInst == 1)
 			GSimVisual::getInstance().setWorld(this->clone1->clonedWorld);
 		//else if (GSimVisual:: clicks % NUM_CLONE == 2)
 		//	GSimVisual::getInstance().setWorld(this->clone2->clonedWorld);
@@ -298,16 +299,15 @@ public:
 			//if (stepCountHost != MONITOR_STEP)
 			//goto SKIP_DEBUG_OUT_OF_AGENT_ARRAY;
 			fout<<"step:"<<stepCountHost<<std::endl;
-			int numElemMaxHost = this->originalAgentsHost->numElemMax;
 			int numElemHost = this->originalAgentsHost->numElem;
 			std::cout<<stepCountHost<<" "<<numElemHost;
 
 			if (stepCountHost % 2 == 0)
-				cudaMemcpy(dataHost, this->originalAgentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataHost, this->originalAgentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
 			else
-				cudaMemcpy(dataHost, this->originalAgentsHost->dataArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataHost, this->originalAgentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
 
-			cudaMemcpy(dataIdxArrayHost, this->originalAgentsHost->dataIdxArray, sizeof(int) * numElemMaxHost, cudaMemcpyDeviceToHost);
+			cudaMemcpy(dataIdxArrayHost, this->originalAgentsHost->dataIdxArray, sizeof(int) * numAgentLocal, cudaMemcpyDeviceToHost);
 
 			for(int i = 0; i < numElemHost; i ++) {
 				int dataIdx = dataIdxArrayHost[i];
@@ -322,18 +322,17 @@ public:
 			fout <<"-------------------"<<std::endl;
 
 #if defined(CLONE)
-			numElemMaxHost = this->clone1->agentsHost->numElemMax;
 			numElemHost = this->clone1->agentsHost->numElem;
 			std::cout<<" "<<numElemHost<<std::endl;
 			if (stepCountHost % 2 == 0) {
-				cudaMemcpy(dataHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
-				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
 			} else {
-				cudaMemcpy(dataHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
-				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numElemMaxHost, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
 			}
 
-			cudaMemcpy(dataIdxArrayHost, this->clone1->agentsHost->dataIdxArray, sizeof(int) * numElemMaxHost, cudaMemcpyDeviceToHost);
+			cudaMemcpy(dataIdxArrayHost, this->clone1->agentsHost->dataIdxArray, sizeof(int) * numAgentLocal, cudaMemcpyDeviceToHost);
 
 			for(int i = 0; i < numElemHost; i ++) {
 				int dataIdx = dataIdxArrayHost[i];
@@ -431,7 +430,7 @@ __host__ void SocialForceClone::step(SocialForceAgent** originalAgents, int num,
 
 #ifdef CLONE_COMPARE
 		//3. double check
-		compareOriginAndClone<<<gSize, BLOCK_SIZE>>>(this->agents, clonedWorld, numAgentsB);
+		compareOriginAndClone<<<gSize, BLOCK_SIZE>>>(this->agents, clonedWorld, numAgentsB, cloneid);
 
 		//4. clean pool again, since some agents are removed
 		this->agentsHost->cleanup(this->agents);
@@ -460,8 +459,8 @@ public:
 	int id;
 	int cloneid;
 
-	bool cloned;
-	bool cloning;
+	bool cloned[NUM_CLONE];
+	bool cloning[NUM_CLONE];
 
 	SocialForceAgent *myOrigin;
 	obstacleLine *myWall;
@@ -580,12 +579,12 @@ public:
 		while (otherData != NULL) {
 			otherDataLocal = *otherData;
 			SocialForceAgent *otherPtr = (SocialForceAgent*)otherData->agentPtr;
-			bool otherCloned = otherPtr->cloned;
 			ds = length(otherDataLocal.loc - dataLocal.loc);
 			if (ds < 6 && ds > 0 ) {
 				computeIndivSocialForce(dataLocal, otherDataLocal, fSum);
-				if (otherCloned == true) // decision point B: impaction from neighboring agent
-					this->cloning = true;
+				for (int i = 0; i < NUM_CLONE; i++)
+					if (otherPtr->cloned[i] == true) // decision point B: impaction from neighboring agent
+						this->cloning[i] = true;
 			}
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 		}
@@ -617,8 +616,10 @@ public:
 
 #ifdef CLONE
 		//decision point A: impaction from wall
-		if(holeB.pointToLineDist(loc) < 20 && this->cloned == false) {
-			this->cloning = true;
+		if(holeB.pointToLineDist(loc) < 20) {
+			for (int i = 0; i < NUM_CLONE; i++)
+				if (this->cloned[i] == false)
+					this->cloning[i] = true;
 		}
 #endif
 
@@ -697,8 +698,10 @@ public:
 
 		this->cloneid = 0;
 		this->id = dataSlot;
-		this->cloned = false;
-		this->cloning = false;
+		for (int i = 0; i < NUM_CLONE; i++) {
+			this->cloned[i] = false;
+			this->cloning[i] = false;
+		}
 		this->myOrigin = NULL;
 
 		SocialForceAgentData dataLocal; //= &sfModel->originalAgents->dataArray[dataSlot];
@@ -759,8 +762,10 @@ public:
 		
 		this->cloneid = cloneid;
 		this->id = agent.id;
-		this->cloned = false;
-		this->cloning = false;
+		for (int i = 0; i < NUM_CLONE; i++){
+			this->cloned[i] = false;
+			this->cloning[i] = false;
+		}
 		this->myOrigin = originPtr;
 		this->myWall = &walls[cloneid * 2 + 2];
 
@@ -810,9 +815,10 @@ __global__ void cloneKernel(SocialForceAgent **originalAgents, AgentPool<SocialF
 		SocialForceAgent ag, *agPtr = originalAgents[idx];
 		ag = *agPtr;
 
-		if( ag.cloning == true && ag.cloned == false) {
-			ag.cloned = true;
-			ag.cloning = false;
+		int cloneidLocal = cloneid - 1;
+		if( ag.cloning[cloneidLocal] == true && ag.cloned[cloneidLocal] == false) {
+			ag.cloned[cloneidLocal] = true;
+			ag.cloning[cloneidLocal] = false;
 			*agPtr = ag;
 
 			int agentSlot = pool->agentSlot();
@@ -837,7 +843,8 @@ __global__ void replaceOriginalWithClone(GAgent **originalAgents, SocialForceAge
 __global__ void compareOriginAndClone(
 	AgentPool<SocialForceAgent, SocialForceAgentData> *clonedPool,
 	GWorld *clonedWorld,
-	int numClonedAgents) 
+	int numClonedAgents,
+	int cloneid) 
 {
 	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
 	if (idx < numClonedAgents) {
@@ -858,16 +865,10 @@ __global__ void compareOriginAndClone(
 		if (match) {
 			//remove from cloned set, reset clone state to non-cloned
 			clonedPool->remove(idx);
-			originalAg->cloned = false;
-			originalAg->cloning = false;
+			int cloneidLocal = cloneid - 1;
+			originalAg->cloned[cloneidLocal] = false;
+			originalAg->cloning[cloneidLocal] = false;
 		}
-#ifdef _DEBUG
-		else {
-			printf("step: %d", stepCount);
-			printf("\torigin: %d, %f, %f, %f, %f\n", originalAgData.id, originalAgData.loc.x, originalAgData.loc.y, originalAgData.velocity.x, originalAgData.velocity.y);
-			printf("\tcloned: %d, %f, %f, %f, %f\n", clonedAgData.id, clonedAgData.loc.x, clonedAgData.loc.y, clonedAgData.velocity.x, clonedAgData.velocity.y);
-		}
-#endif
 	}
 }
 #endif
