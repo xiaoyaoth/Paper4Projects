@@ -15,7 +15,9 @@ typedef struct SocialForceAgentData : public GAgentData_t {
 	float2 velocity;
 	float v0;
 	float mass;
+	//for debug
 	int id;
+	int neibCount;
 	__device__ void putDataInSmem(GAgent *ag);
 };
 
@@ -93,7 +95,8 @@ struct obstacleLine
 #define	maxv 3
 
 #define NUM_CLONE 1
-#define NUM_WALLS 6
+#define NUM_WALLS 8
+#define CHOSEN_CLONE_ID NUM_CLONE
 __constant__ int numAgent;
 __constant__ obstacleLine holeB;
 __constant__ obstacleLine walls[NUM_WALLS];
@@ -112,6 +115,7 @@ int throughputHost;
 #define LEFT_GATE_SIZE 2
 #define RIGHT_GATE_SIZE_A 2
 #define RIGHT_GATE_SIZE_B 4
+#define RIGHT_GATE_SIZE_C 6
 
 #define MONITOR_STEP 41
 #define CLONE
@@ -200,11 +204,13 @@ public:
 
 		gateHost[4].init(0.75 * modelHostParams.WIDTH, -20, 0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT - RIGHT_GATE_SIZE_B);
 		gateHost[5].init(0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + RIGHT_GATE_SIZE_B, 0.75 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
+		gateHost[6].init(0.75 * modelHostParams.WIDTH, -20, 0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT - RIGHT_GATE_SIZE_C);
+		gateHost[7].init(0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + RIGHT_GATE_SIZE_C, 0.75 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
 
 		cudaMemcpyToSymbol(walls, &gateHost, NUM_WALLS * sizeof(obstacleLine));
 
-		holeHost.init(	0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT - RIGHT_GATE_SIZE_B,
-			0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + RIGHT_GATE_SIZE_B);
+		holeHost.init(	0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT - RIGHT_GATE_SIZE_C,
+			0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + RIGHT_GATE_SIZE_C);
 		cudaMemcpyToSymbol(holeB, &holeHost, sizeof(obstacleLine));
 
 		//init agent pool
@@ -272,8 +278,8 @@ public:
 #ifdef CLONE
 		else if (GSimVisual:: clicks % numInst == 1)
 			GSimVisual::getInstance().setWorld(this->clone1->clonedWorld);
-		//else if (GSimVisual:: clicks % NUM_CLONE == 2)
-		//	GSimVisual::getInstance().setWorld(this->clone2->clonedWorld);
+		//else if (GSimVisual:: clicks % numInst == 2)
+			//GSimVisual::getInstance().setWorld(this->clone2->clonedWorld);
 #endif
 #endif
 		getLastCudaError("copyHostToDevice");
@@ -312,6 +318,7 @@ public:
 			for(int i = 0; i < numElemHost; i ++) {
 				int dataIdx = dataIdxArrayHost[i];
 				fout << dataHost[dataIdx].id
+					<< "\t" << dataHost[dataIdx].neibCount 
 					<< "\t" << dataHost[dataIdx].loc.x 
 					<< "\t" << dataHost[dataIdx].loc.y 
 					<< "\t"	<< dataHost[dataIdx].velocity.x 
@@ -337,6 +344,7 @@ public:
 			for(int i = 0; i < numElemHost; i ++) {
 				int dataIdx = dataIdxArrayHost[i];
 				fout << dataHost[dataIdx].id
+					<< "\t" << dataHost[dataIdx].neibCount 
 					<< "\t" << dataHost[dataIdx].loc.x 
 					<< "\t" << dataHost[dataIdx].loc.y
 					<< "\t"	<< dataHost[dataIdx].velocity.x 
@@ -344,17 +352,17 @@ public:
 					<< "\t" << std::endl;
 				fout.flush();
 			}
-			fout <<"-------------------"<<std::endl;
-			for(int i = 0; i < numElemHost; i ++) {
-				int dataIdx = dataIdxArrayHost[i];
-				fout << dataCopyHost[dataIdx].id
-					<< "\t" << dataCopyHost[dataIdx].loc.x 
-					<< "\t" << dataCopyHost[dataIdx].loc.y
-					<< "\t"	<< dataCopyHost[dataIdx].velocity.x 
-					<< "\t" << dataCopyHost[dataIdx].velocity.y 
-					<< "\t" << std::endl;
-				fout.flush();
-			}
+			//fout <<"-------------------"<<std::endl;
+			//for(int i = 0; i < numElemHost; i ++) {
+			//	int dataIdx = dataIdxArrayHost[i];
+			//	fout << dataCopyHost[dataIdx].id
+			//		<< "\t" << dataCopyHost[dataIdx].loc.x 
+			//		<< "\t" << dataCopyHost[dataIdx].loc.y
+			//		<< "\t"	<< dataCopyHost[dataIdx].velocity.x 
+			//		<< "\t" << dataCopyHost[dataIdx].velocity.y 
+			//		<< "\t" << std::endl;
+			//	fout.flush();
+			//}
 			fout <<"==================="<<std::endl<<std::endl;
 			fout.flush();
 #endif
@@ -457,10 +465,11 @@ public:
 	GWorld *myWorld;
 
 	int id;
+#ifdef CLONE
 	int cloneid;
-
 	bool cloned[NUM_CLONE];
 	bool cloning[NUM_CLONE];
+#endif
 
 	SocialForceAgent *myOrigin;
 	obstacleLine *myWall;
@@ -566,13 +575,15 @@ public:
 		dvt.x = (diff.x - velo.x) / tao;
 		dvt.y = (diff.y - velo.y) / tao;
 	}
-	__device__ void computeSocialForce(const SocialForceAgentData &dataLocal, float2 &fSum) {
+	__device__ void computeSocialForce(SocialForceAgentData &dataLocal, float2 &fSum) {
 		GWorld *world = this->myWorld;
 		iterInfo info;
 
 		fSum.x = 0; fSum.y = 0;
 		SocialForceAgentData *otherData, otherDataLocal;
 		float ds = 0;
+
+		int neighborCount = 0;
 
 		world->neighborQueryInit(dataLocal.loc, 6, info);
 		otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
@@ -581,13 +592,17 @@ public:
 			SocialForceAgent *otherPtr = (SocialForceAgent*)otherData->agentPtr;
 			ds = length(otherDataLocal.loc - dataLocal.loc);
 			if (ds < 6 && ds > 0 ) {
+				neighborCount++;
 				computeIndivSocialForce(dataLocal, otherDataLocal, fSum);
+#ifdef CLONE
 				for (int i = 0; i < NUM_CLONE; i++)
 					if (otherPtr->cloned[i] == true) // decision point B: impaction from neighboring agent
 						this->cloning[i] = true;
+#endif
 			}
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 		}
+		dataLocal.neibCount = neighborCount;
 	}
 
 	__device__ void step(GModel *model){
@@ -627,9 +642,9 @@ public:
 		dvt.x += fSum.x / mass;
 		dvt.y += fSum.y / mass;
 
-		float2 &newVelo = dataLocal.velocity;
-		float2 &newLoc = dataLocal.loc;
-		float2 &newGoal = dataLocal.goal;
+		float2 newVelo = dataLocal.velocity;
+		float2 newLoc = dataLocal.loc;
+		float2 newGoal = dataLocal.goal;
 
 		float tick = 0.1;
 		newVelo.x += dvt.x * tick * (1);// + this->random->gaussian() * 0.1);
@@ -667,7 +682,7 @@ public:
 		{
 			newGoal.x = modelDevParams.WIDTH;
 #ifdef CLONE
-			if (goalTemp != newGoal.x && this->cloneid != 0) 
+			if (goalTemp != newGoal.x && this->cloneid == CHOSEN_CLONE_ID) 
 #else
 			if (goalTemp != newGoal.x) 	
 #endif
@@ -677,7 +692,12 @@ public:
 		newLoc.x = correctCrossBoader(newLoc.x, modelDevParams.WIDTH);
 		newLoc.y = correctCrossBoader(newLoc.y, modelDevParams.HEIGHT);
 
-		*(SocialForceAgentData*)this->dataCopy = dataLocal;
+		SocialForceAgentData dataCopy = dataLocal;
+		dataCopy.loc = newLoc;
+		dataCopy.velocity = newVelo;
+		dataCopy.goal = newGoal;
+
+		*(SocialForceAgentData*)this->dataCopy = dataCopy;
 	}
 
 	__device__ void fillSharedMem(void *dataPtr){
@@ -692,16 +712,15 @@ public:
 		this->random = sfModel->random;
 #endif
 		this->color = colorConfigs.green;
-
-		if (dataSlot == 11)
-			this->color = colorConfigs.blue;
-
-		this->cloneid = 0;
 		this->id = dataSlot;
+
+#ifdef CLONE
+		this->cloneid = 0;
 		for (int i = 0; i < NUM_CLONE; i++) {
 			this->cloned[i] = false;
 			this->cloning[i] = false;
 		}
+#endif
 		this->myOrigin = NULL;
 
 		SocialForceAgentData dataLocal; //= &sfModel->originalAgents->dataArray[dataSlot];
@@ -755,10 +774,13 @@ public:
 		int cloneid) 
 	{
 		this->myWorld = clonedWorld;
-		//if (cloneid == 1) {
+		if (cloneid == 1) {
 			this->color = colorConfigs.red;
 			this->gateSize = RIGHT_GATE_SIZE_B;
-		//}
+		} else if (cloneid == 2) {
+			this->color = colorConfigs.yellow;
+			this->gateSize = RIGHT_GATE_SIZE_C;
+		}
 		
 		this->cloneid = cloneid;
 		this->id = agent.id;
@@ -855,13 +877,17 @@ __global__ void compareOriginAndClone(
 
 		bool match;
 		//compare equivalence of two copies of data;
-#define DELTA 0.000001
-		match = (abs(clonedAgData.loc.x - originalAgData.loc.x) <= DELTA)
-			&& (abs(clonedAgData.loc.y - originalAgData.loc.y) <= DELTA)
-			&& (abs(clonedAgData.velocity.x - originalAgData.velocity.x) <= DELTA)
-			&& (abs(clonedAgData.velocity.y - originalAgData.velocity.y) <= DELTA)
-			&& (abs(clonedAgData.goal.x - originalAgData.goal.x) <= DELTA)
-			&& (abs(clonedAgData.goal.y - originalAgData.goal.y) <= DELTA);
+#define DELTA FLT_EPSILON
+		float diffLocX = clonedAgData.loc.x - originalAgData.loc.x;
+		float diffLocY = clonedAgData.loc.y - originalAgData.loc.y;
+		float diffVelX = clonedAgData.velocity.x - originalAgData.velocity.x;
+		float diffVelY = clonedAgData.velocity.y - originalAgData.velocity.y;
+		match = (diffLocX * diffLocX <= DELTA)
+			&& (diffLocY * diffLocY <= DELTA)
+			&& (diffVelX * diffVelX <= DELTA)
+			&& (diffVelY * diffVelY <= DELTA); 
+			//&& (clonedAgData.goal.x - originalAgData.goal.x == DELTA)
+			//&& (clonedAgData.goal.y - originalAgData.goal.y == DELTA);
 		if (match) {
 			//remove from cloned set, reset clone state to non-cloned
 			clonedPool->remove(idx);
@@ -869,6 +895,15 @@ __global__ void compareOriginAndClone(
 			originalAg->cloned[cloneidLocal] = false;
 			originalAg->cloning[cloneidLocal] = false;
 		}
+#ifdef _DEBUG
+		else {
+			originalAg->color = colorConfigs.blue;
+			printf("step: %d\n", stepCount);
+			printf("\t origin:%d, clone:%d", originalAgData.id, clonedAgData.id);
+			printf("\t diffLocSqr:[%f, %f]", diffLocX * diffLocX, diffLocY * diffLocY);
+			printf("\t diffVelSqr:[%f, %f]", diffVelX * diffVelX, diffVelY * diffVelY);
+		}
+#endif
 	}
 }
 #endif
