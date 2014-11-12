@@ -113,11 +113,11 @@ int throughputHost;
 
 #define GATE_LINE_NUM 2
 #define LEFT_GATE_SIZE 2
-#define RIGHT_GATE_SIZE_A 2
+#define RIGHT_GATE_SIZE_A 4
 #define RIGHT_GATE_SIZE_B 4
 #define RIGHT_GATE_SIZE_C 6
 
-#define MONITOR_STEP 41
+#define MONITOR_STEP 41 
 #define CLONE
 #define CLONE_COMPARE
 #define CLONE_PERCENT 0.5
@@ -369,7 +369,7 @@ public:
 
 #else
 		cudaMemcpyFromSymbol(&throughputHost, throughput, sizeof(int));
-		fout<<throughputHost<<std::endl;
+		fout<<stepCount<<"\t"<<throughputHost<<std::endl;
 		fout.flush();
 #endif
 
@@ -686,8 +686,22 @@ public:
 #else
 			if (goalTemp != newGoal.x) 	
 #endif
+			{
 				atomicInc(&throughput, 8192);
+				//printf("%d\t %d\n", stepCount, dataLocal.id);
+				if (dataLocal.id == 4554) {
+					printf("Clone %d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, dataLocal.id, dataLocal.loc.x, dataLocal.loc.y, dataLocal.velocity.x, dataLocal.velocity.y, dataLocal.goal.x, dataLocal.goal.y);
+				}
+			}
 		}
+
+		if (dataLocal.id == 4554) {
+#ifdef CLONE
+			printf("%d ", this->cloneid);
+#endif
+			printf("%d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, dataLocal.id, dataLocal.loc.x, dataLocal.loc.y, dataLocal.velocity.x, dataLocal.velocity.y, dataLocal.goal.x, dataLocal.goal.y);
+		}
+
 
 		newLoc.x = correctCrossBoader(newLoc.x, modelDevParams.WIDTH);
 		newLoc.y = correctCrossBoader(newLoc.y, modelDevParams.HEIGHT);
