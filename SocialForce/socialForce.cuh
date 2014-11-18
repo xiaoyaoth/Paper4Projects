@@ -23,12 +23,12 @@ typedef struct SocialForceAgentData : public GAgentData_t {
 
 struct obstacleLine
 {
-	float sx;
-	float sy;
-	float ex;
-	float ey;
+	double sx;
+	double sy;
+	double ex;
+	double ey;
 
-	__host__ void init(float sxx, float syy, float exx, float eyy)
+	__host__ void init(double sxx, double syy, double exx, double eyy)
 	{
 		sx = sxx;
 		sy = syy;
@@ -39,14 +39,14 @@ struct obstacleLine
 	__device__ float pointToLineDist(float2 loc) 
 	{
 		float a, b;
-		return this->pointToLineDist(loc, a, b);
+		return this->pointToLineDist(loc, a, b, 0);
 	}
 
-	__device__ float pointToLineDist(float2 loc, float &crx, float &cry) 
+	__device__ float pointToLineDist(float2 loc, float &crx, float &cry, int id) 
 	{
-		float d = DIST(sx, sy, ex, ey);
-		float t0 = ((ex - sx) * (loc.x - sx) + (ey - sy) * (loc.y - sy)) / (d * d);
-
+		double d = DIST(sx, sy, ex, ey);
+		double t0 = ((ex - sx) * (loc.x - sx) + (ey - sy) * (loc.y - sy)) / (d * d);
+	
 		if(t0 < 0){
 			d = sqrt((loc.x - sx) * (loc.x - sx) + (loc.y - sy) * (loc.y - sy));
 		}else if(t0 > 1){
@@ -59,18 +59,24 @@ struct obstacleLine
 		}
 		crx = sx + t0 * (ex - sx);
 		cry = sy + t0 * (ey - sy);
+
+		//if (stepCount == 0 && id == 263) {
+		//	printf("cross: (%f, %f)\n", crx, cry);
+		//	printf("t0: %f, d: %f\n", t0, d);
+		//}
+
 		return d;
 	}
 
-	__device__ int intersection2LineSeg(float p0x, float p0y, float p1x, float p1y, float &ix, float &iy)
+	__device__ int intersection2LineSeg(double p0x, double p0y, double p1x, double p1y, float &ix, float &iy)
 	{
-		float s1x, s1y, s2x, s2y;
+		double s1x, s1y, s2x, s2y;
 		s1x = p1x - p0x;
 		s1y = p1y - p0y;
 		s2x = ex - sx;
 		s2y = ey - sy;
 
-		float s, t;
+		double s, t;
 		s = (-s1y * (p0x - sx) + s1x * (p0y - sy)) / (-s2x * s1y + s1x * s2y);
 		t = ( s2x * (p0y - sy) - s2y * (p0x - sx)) / (-s2x * s1y + s1x * s2y);
 
@@ -105,22 +111,31 @@ __device__ uint throughput;
 int throughputHost;
 //std::fstream fout;
 //char *outfname;
+
+//#define CLONE
+
+#define GATE_LINE_NUM 2
+#define LEFT_GATE_SIZE 2
+#ifdef CLONE
+#define RIGHT_GATE_SIZE_A 2
+#else
+#define RIGHT_GATE_SIZE_A 4
+#endif
+#define RIGHT_GATE_SIZE_B 4
+#define RIGHT_GATE_SIZE_C 6
+
+#define MONITOR_STEP 37 
+#define MONITOR_ID 1990 
+#define CLONE_COMPARE
+#define CLONE_PERCENT 0.5
+
+#define _DEBUG
+
 #ifdef _DEBUG
 	SocialForceAgentData *dataHost;
 	SocialForceAgentData *dataCopyHost;
 	int *dataIdxArrayHost;
 #endif
-
-#define GATE_LINE_NUM 2
-#define LEFT_GATE_SIZE 2
-#define RIGHT_GATE_SIZE_A 4
-#define RIGHT_GATE_SIZE_B 4
-#define RIGHT_GATE_SIZE_C 6
-
-#define MONITOR_STEP 41 
-#define CLONE
-#define CLONE_COMPARE
-#define CLONE_PERCENT 0.5
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
 
@@ -306,7 +321,6 @@ public:
 			//goto SKIP_DEBUG_OUT_OF_AGENT_ARRAY;
 			fout<<"step:"<<stepCountHost<<std::endl;
 			int numElemHost = this->originalAgentsHost->numElem;
-			std::cout<<stepCountHost<<" "<<numElemHost;
 
 			if (stepCountHost % 2 == 0)
 				cudaMemcpy(dataHost, this->originalAgentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
@@ -330,7 +344,7 @@ public:
 
 #if defined(CLONE)
 			numElemHost = this->clone1->agentsHost->numElem;
-			std::cout<<" "<<numElemHost<<std::endl;
+			//std::cout<<" "<<numElemHost<<std::endl;
 			if (stepCountHost % 2 == 0) {
 				cudaMemcpy(dataHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
 				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
@@ -369,7 +383,7 @@ public:
 
 #else
 		cudaMemcpyFromSymbol(&throughputHost, throughput, sizeof(int));
-		fout<<stepCount<<"\t"<<throughputHost<<std::endl;
+		fout<<throughputHost<<std::endl;
 		fout.flush();
 #endif
 
@@ -516,8 +530,14 @@ public:
 	__device__ void computeForceWithWall(const SocialForceAgentData &dataLocal, obstacleLine &wall, const int &cMass, float2 &fSum) {
 		float diw, crx, cry;
 		const float2 &loc = dataLocal.loc;
-		diw = wall.pointToLineDist(loc, crx, cry);
+		
+		diw = wall.pointToLineDist(loc, crx, cry, this->id);
 		float virDiw = DIST(loc.x, loc.y, crx, cry);
+
+		//if (stepCount == MONITOR_STEP && this->id == 263) {
+		//	printf("dist: %f, cross: (%f, %f)\n", diw, crx, cry);
+		//}
+
 		float niwx = (loc.x - crx) / virDiw;
 		float niwy = (loc.y - cry) / virDiw;
 		float drw = dataLocal.mass / cMass - diw;
@@ -598,7 +618,15 @@ public:
 				for (int i = 0; i < NUM_CLONE; i++)
 					if (otherPtr->cloned[i] == true) // decision point B: impaction from neighboring agent
 						this->cloning[i] = true;
+				//if (stepCount == 204 && dataLocal.id == 4554) {
+				//	printf("[%d, %d]", this->cloneid, otherPtr->cloned[0]);
+				//}
 #endif
+				/*
+				if (stepCount == 0 && dataLocal.id == 263) {
+					printf("%d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, otherDataLocal.id, otherDataLocal.loc.x, otherDataLocal.loc.y, otherDataLocal.velocity.x, otherDataLocal.velocity.y, otherDataLocal.goal.x, otherDataLocal.goal.y);
+				}
+				*/
 			}
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 		}
@@ -625,9 +653,17 @@ public:
 		float2 fSum; 
 		computeSocialForce(dataLocal, fSum);
 
+		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
+			printf("fSum: (%f, %f)\n", fSum.x, fSum.y);
+		}
+
 		//compute force with wall
 		computeForceWithWall(dataLocal, myWall[0], cMass, fSum);
 		computeForceWithWall(dataLocal, myWall[1], cMass, fSum);
+
+		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
+			printf("fSum: (%f, %f)\n", fSum.x, fSum.y);
+		}
 
 #ifdef CLONE
 		//decision point A: impaction from wall
@@ -642,14 +678,27 @@ public:
 		dvt.x += fSum.x / mass;
 		dvt.y += fSum.y / mass;
 
+		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
+			printf("dvt: (%f, %f)\n", dvt.x, dvt.y);
+		}
+
 		float2 newVelo = dataLocal.velocity;
 		float2 newLoc = dataLocal.loc;
 		float2 newGoal = dataLocal.goal;
+
+		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
+			printf("oldVelo: (%f, %f)\n", newVelo.x, newVelo.y);
+		}
 
 		float tick = 0.1;
 		newVelo.x += dvt.x * tick * (1);// + this->random->gaussian() * 0.1);
 		newVelo.y += dvt.y * tick * (1);// + this->random->gaussian() * 0.1);
 		float dv = sqrt(newVelo.x * newVelo.x + newVelo.y * newVelo.y);
+
+		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
+			printf("dv: %f\n", dv);
+			printf("newVelo: (%f, %f)\n", newVelo.x, newVelo.y);
+		}
 
 		if (dv > maxv) {
 			newVelo.x = newVelo.x * maxv / dv;
@@ -664,6 +713,11 @@ public:
 		newVelo.y *= mint;
 		newLoc.x += newVelo.x * tick;
 		newLoc.y += newVelo.y * tick;
+
+		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
+			printf("mint: %f\n", mint);
+			printf("newVelo: (%f, %f)\n", newVelo.x, newVelo.y);
+		}
 
 		float goalTemp = goal.x;
 
@@ -688,30 +742,25 @@ public:
 #endif
 			{
 				atomicInc(&throughput, 8192);
-				//printf("%d\t %d\n", stepCount, dataLocal.id);
-				if (dataLocal.id == 4554) {
-					printf("Clone %d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, dataLocal.id, dataLocal.loc.x, dataLocal.loc.y, dataLocal.velocity.x, dataLocal.velocity.y, dataLocal.goal.x, dataLocal.goal.y);
-				}
 			}
 		}
-
-		if (dataLocal.id == 4554) {
-#ifdef CLONE
-			printf("%d ", this->cloneid);
-#endif
-			printf("%d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, dataLocal.id, dataLocal.loc.x, dataLocal.loc.y, dataLocal.velocity.x, dataLocal.velocity.y, dataLocal.goal.x, dataLocal.goal.y);
-		}
-
 
 		newLoc.x = correctCrossBoader(newLoc.x, modelDevParams.WIDTH);
 		newLoc.y = correctCrossBoader(newLoc.y, modelDevParams.HEIGHT);
 
-		SocialForceAgentData dataCopy = dataLocal;
-		dataCopy.loc = newLoc;
-		dataCopy.velocity = newVelo;
-		dataCopy.goal = newGoal;
+		SocialForceAgentData dataCopyLocal = dataLocal;
+		dataCopyLocal.loc = newLoc;
+		dataCopyLocal.velocity = newVelo;
+		dataCopyLocal.goal = newGoal;
 
-		*(SocialForceAgentData*)this->dataCopy = dataCopy;
+		
+		if (stepCount == MONITOR_STEP && dataLocal.id == MONITOR_ID) {
+			printf("BEF: %d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, dataLocal.id, dataLocal.loc.x, dataLocal.loc.y, dataLocal.velocity.x, dataLocal.velocity.y, dataLocal.goal.x, dataLocal.goal.y);
+			printf("AFT: %d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, dataCopyLocal.id, dataCopyLocal.loc.x, dataCopyLocal.loc.y, dataCopyLocal.velocity.x, dataCopyLocal.velocity.y, dataCopyLocal.goal.x, dataCopyLocal.goal.y);
+		}
+		
+
+		*(SocialForceAgentData*)this->dataCopy = dataCopyLocal;
 	}
 
 	__device__ void fillSharedMem(void *dataPtr){
@@ -909,6 +958,7 @@ __global__ void compareOriginAndClone(
 			originalAg->cloned[cloneidLocal] = false;
 			originalAg->cloning[cloneidLocal] = false;
 		}
+		/*
 #ifdef _DEBUG
 		else {
 			originalAg->color = colorConfigs.blue;
@@ -918,6 +968,7 @@ __global__ void compareOriginAndClone(
 			printf("\t diffVelSqr:[%f, %f]", diffVelX * diffVelX, diffVelY * diffVelY);
 		}
 #endif
+		*/
 	}
 }
 #endif
