@@ -11,10 +11,10 @@ class SocialForceAgent;
 class SocialForceClone;
 
 typedef struct SocialForceAgentData : public GAgentData_t {
-	float2 goal;
-	float2 velocity;
-	float v0;
-	float mass;
+	double2 goal;
+	double2 velocity;
+	double v0;
+	double mass;
 	//for debug
 	int id;
 	int neibCount;
@@ -36,13 +36,13 @@ struct obstacleLine
 		ey = eyy;
 	}
 
-	__device__ float pointToLineDist(float2 loc) 
+	__device__ double pointToLineDist(float2 loc) 
 	{
-		float a, b;
+		double a, b;
 		return this->pointToLineDist(loc, a, b, 0);
 	}
 
-	__device__ float pointToLineDist(float2 loc, float &crx, float &cry, int id) 
+	__device__ double pointToLineDist(float2 loc, double &crx, double &cry, int id) 
 	{
 		double d = DIST(sx, sy, ex, ey);
 		double t0 = ((ex - sx) * (loc.x - sx) + (ey - sy) * (loc.y - sy)) / (d * d);
@@ -68,7 +68,7 @@ struct obstacleLine
 		return d;
 	}
 
-	__device__ int intersection2LineSeg(double p0x, double p0y, double p1x, double p1y, float &ix, float &iy)
+	__device__ int intersection2LineSeg(double p0x, double p0y, double p1x, double p1y, double &ix, double &iy)
 	{
 		double s1x, s1y, s2x, s2y;
 		s1x = p1x - p0x;
@@ -100,7 +100,7 @@ struct obstacleLine
 #define k2 (2.4 * 100000)
 #define	maxv 3
 
-#define NUM_CLONE 1
+#define NUM_CLONE 2
 #define NUM_WALLS 8
 #define CHOSEN_CLONE_ID NUM_CLONE
 __constant__ int numAgent;
@@ -119,17 +119,17 @@ int throughputHost;
 #ifdef CLONE
 #define RIGHT_GATE_SIZE_A 2
 #else
-#define RIGHT_GATE_SIZE_A 4
+#define RIGHT_GATE_SIZE_A 6
 #endif
 #define RIGHT_GATE_SIZE_B 4
 #define RIGHT_GATE_SIZE_C 6
 
-#define MONITOR_STEP 37 
+#define MONITOR_STEP 38 
 #define MONITOR_ID 1990 
 #define CLONE_COMPARE
 #define CLONE_PERCENT 0.5
 
-#define _DEBUG
+//#define _DEBUG
 
 #ifdef _DEBUG
 	SocialForceAgentData *dataHost;
@@ -186,7 +186,7 @@ public:
 	std::fstream fout;
 #ifdef CLONE
 	SocialForceClone *clone1;
-	//SocialForceClone *clone2;
+	SocialForceClone *clone2;
 #endif
 
 	__host__ SocialForceModel(char **modelArgs) {
@@ -249,7 +249,7 @@ public:
 #ifdef CLONE
 		//init clone
 		clone1 = new SocialForceClone(numAgentLocal);
-		//clone2 = new SocialForceClone(numAgentLocal);
+		clone2 = new SocialForceClone(numAgentLocal);
 #endif
 
 		//debug info
@@ -270,7 +270,7 @@ public:
 		//initialize unsorted agent array in clones with original agents
 #ifdef CLONE
 		this->clone1->start(this->originalAgentsHost->agentPtrArray, numAgentLocal);
-		//this->clone2->start(this->originalAgentsHost->agentPtrArray, numAgentLocal);
+		this->clone2->start(this->originalAgentsHost->agentPtrArray, numAgentLocal);
 #endif
 
 		//paint related
@@ -293,8 +293,8 @@ public:
 #ifdef CLONE
 		else if (GSimVisual:: clicks % numInst == 1)
 			GSimVisual::getInstance().setWorld(this->clone1->clonedWorld);
-		//else if (GSimVisual:: clicks % numInst == 2)
-			//GSimVisual::getInstance().setWorld(this->clone2->clonedWorld);
+		else if (GSimVisual:: clicks % numInst == 2)
+			GSimVisual::getInstance().setWorld(this->clone2->clonedWorld);
 #endif
 #endif
 		getLastCudaError("copyHostToDevice");
@@ -312,7 +312,7 @@ public:
 		//2. run the clones
 #ifdef CLONE
 		clone1->step(this->originalAgentsHost->agentPtrArray, numAgentLocal, this);
-		//clone2->step(this->originalAgentsHost->agentPtrArray, numAgentLocal, this);
+		clone2->step(this->originalAgentsHost->agentPtrArray, numAgentLocal, this);
 #endif
 
 		//debug info, print the real data of original agents and cloned agents, or throughputs
@@ -391,7 +391,7 @@ public:
 		this->originalAgentsHost->swapPool();
 #ifdef CLONE
 		this->clone1->agentsHost->swapPool();
-		//this->clone2->agentsHost->swapPool();
+		this->clone2->agentsHost->swapPool();
 #endif
 		getLastCudaError("step");
 
@@ -464,7 +464,7 @@ __host__ void SocialForceClone::step(SocialForceAgent** originalAgents, int num,
 }
 #endif
 
-__device__ float correctCrossBoader(float val, float limit)
+__device__ double correctCrossBoader(double val, double limit)
 {
 	if (val > limit)
 		return limit-0.001;
@@ -487,70 +487,70 @@ public:
 
 	SocialForceAgent *myOrigin;
 	obstacleLine *myWall;
-	float gateSize;
+	double gateSize;
 
 
-	__device__ void computeIndivSocialForce(const SocialForceAgentData &myData, const SocialForceAgentData &otherData, float2 &fSum){
-		float cMass = 100;
+	__device__ void computeIndivSocialForce(const SocialForceAgentData &myData, const SocialForceAgentData &otherData, double2 &fSum){
+		double cMass = 100;
 		//my data
 		const float2& loc = myData.loc;
-		const float2& goal = myData.goal;
-		const float2& velo = myData.velocity;
-		const float& v0 = myData.v0;
-		const float& mass = myData.mass;
+		const double2& goal = myData.goal;
+		const double2& velo = myData.velocity;
+		const double& v0 = myData.v0;
+		const double& mass = myData.mass;
 		//other's data
 		const float2& locOther = otherData.loc;
-		const float2& goalOther = otherData.goal;
-		const float2& veloOther = otherData.velocity;
-		const float& v0Other = otherData.v0;
-		const float& massOther = otherData.mass;
+		const double2& goalOther = otherData.goal;
+		const double2& veloOther = otherData.velocity;
+		const double& v0Other = otherData.v0;
+		const double& massOther = otherData.mass;
 
-		float d = 1e-15 + sqrt((loc.x - locOther.x) * (loc.x - locOther.x) + (loc.y - locOther.y) * (loc.y - locOther.y));
-		float dDelta = mass / cMass + massOther / cMass - d;
-		float fExp = A * exp(dDelta / B);
-		float fKg = dDelta < 0 ? 0 : k1 *dDelta;
-		float nijx = (loc.x - locOther.x) / d;
-		float nijy = (loc.y - locOther.y) / d;
-		float fnijx = (fExp + fKg) * nijx;
-		float fnijy = (fExp + fKg) * nijy;
-		float fkgx = 0;
-		float fkgy = 0;
+		double d = 1e-15 + sqrt((loc.x - locOther.x) * (loc.x - locOther.x) + (loc.y - locOther.y) * (loc.y - locOther.y));
+		double dDelta = mass / cMass + massOther / cMass - d;
+		double fExp = A * exp(dDelta / B);
+		double fKg = dDelta < 0 ? 0 : k1 *dDelta;
+		double nijx = (loc.x - locOther.x) / d;
+		double nijy = (loc.y - locOther.y) / d;
+		double fnijx = (fExp + fKg) * nijx;
+		double fnijy = (fExp + fKg) * nijy;
+		double fkgx = 0;
+		double fkgy = 0;
 		if (dDelta > 0) {
-			float tix = - nijy;
-			float tiy = nijx;
+			double tix = - nijy;
+			double tiy = nijx;
 			fkgx = k2 * dDelta;
 			fkgy = k2 * dDelta;
-			float vijDelta = (veloOther.x - velo.x) * tix + (veloOther.y - velo.y) * tiy;
+			double vijDelta = (veloOther.x - velo.x) * tix + (veloOther.y - velo.y) * tiy;
 			fkgx = fkgx * vijDelta * tix;
 			fkgy = fkgy * vijDelta * tiy;
 		}
 		fSum.x += fnijx + fkgx;
 		fSum.y += fnijy + fkgy;
 	}
-	__device__ void computeForceWithWall(const SocialForceAgentData &dataLocal, obstacleLine &wall, const int &cMass, float2 &fSum) {
-		float diw, crx, cry;
+	__device__ void computeForceWithWall(const SocialForceAgentData &dataLocal, obstacleLine &wall, const int &cMass, double2 &fSum) {
+		double diw, crx, cry;
 		const float2 &loc = dataLocal.loc;
 		
 		diw = wall.pointToLineDist(loc, crx, cry, this->id);
-		float virDiw = DIST(loc.x, loc.y, crx, cry);
+		double virDiw = DIST(loc.x, loc.y, crx, cry);
 
 		//if (stepCount == MONITOR_STEP && this->id == 263) {
 		//	printf("dist: %f, cross: (%f, %f)\n", diw, crx, cry);
 		//}
 
-		float niwx = (loc.x - crx) / virDiw;
-		float niwy = (loc.y - cry) / virDiw;
-		float drw = dataLocal.mass / cMass - diw;
-		float fiw1 = A * exp(drw / B);
+		double niwx = (loc.x - crx) / virDiw;
+		double niwy = (loc.y - cry) / virDiw;
+		double drw = dataLocal.mass / cMass - diw;
+		double fiw1 = A * exp(drw / B);
 		if (drw > 0)
 			fiw1 += k1 * drw;
-		float fniwx = fiw1 * niwx;
-		float fniwy = fiw1 * niwy;
+		double fniwx = fiw1 * niwx;
+		double fniwy = fiw1 * niwy;
 
-		float fiwKgx = 0, fiwKgy = 0;
+		double fiwKgx = 0, fiwKgy = 0;
 		if (drw > 0)
 		{
-			float fiwKg = k2 * drw * (dataLocal.velocity.x * (-niwy) + dataLocal.velocity.y * niwx);
+			double fiwKg = k2 * drw * (dataLocal.velocity.x * (-niwy) + dataLocal.velocity.y * niwx);
 			fiwKgx = fiwKg * (-niwy);
 			fiwKgy = fiwKg * niwx;
 		}
@@ -558,8 +558,8 @@ public:
 		fSum.x += fniwx - fiwKgx;
 		fSum.y += fniwy - fiwKgy;
 	}
-	__device__ void computeWallImpaction(const SocialForceAgentData &dataLocal, obstacleLine &wall, const float2 &newVelo, const float &tick, float &mint){
-		float crx, cry, tt;
+	__device__ void computeWallImpaction(const SocialForceAgentData &dataLocal, obstacleLine &wall, const double2 &newVelo, const double &tick, double &mint){
+		double crx, cry, tt;
 		const float2 &loc = dataLocal.loc;
 		int ret = wall.intersection2LineSeg(
 			loc.x, 
@@ -579,29 +579,29 @@ public:
 				mint = tt;
 		}
 	}
-	__device__ void computeDirection(const SocialForceAgentData &dataLocal, float2 &dvt) {
+	__device__ void computeDirection(const SocialForceAgentData &dataLocal, double2 &dvt) {
 		//my data
 		const float2& loc = dataLocal.loc;
-		const float2& goal = dataLocal.goal;
-		const float2& velo = dataLocal.velocity;
-		const float& v0 = dataLocal.v0;
-		const float& mass = dataLocal.mass;
+		const double2& goal = dataLocal.goal;
+		const double2& velo = dataLocal.velocity;
+		const double& v0 = dataLocal.v0;
+		const double& mass = dataLocal.mass;
 		
 		dvt.x = 0;	dvt.y = 0;
-		float2 diff; diff.x = 0; diff.y = 0;
-		float d0 = sqrt((loc.x - goal.x) * (loc.x - goal.x) + (loc.y - goal.y) * (loc.y - goal.y));
+		double2 diff; diff.x = 0; diff.y = 0;
+		double d0 = sqrt((loc.x - goal.x) * (loc.x - goal.x) + (loc.y - goal.y) * (loc.y - goal.y));
 		diff.x = v0 * (goal.x - loc.x) / d0;
 		diff.y = v0 * (goal.y - loc.y) / d0;
 		dvt.x = (diff.x - velo.x) / tao;
 		dvt.y = (diff.y - velo.y) / tao;
 	}
-	__device__ void computeSocialForce(SocialForceAgentData &dataLocal, float2 &fSum) {
+	__device__ void computeSocialForce(SocialForceAgentData &dataLocal, double2 &fSum) {
 		GWorld *world = this->myWorld;
 		iterInfo info;
 
 		fSum.x = 0; fSum.y = 0;
 		SocialForceAgentData *otherData, otherDataLocal;
-		float ds = 0;
+		double ds = 0;
 
 		int neighborCount = 0;
 
@@ -635,22 +635,22 @@ public:
 
 	__device__ void step(GModel *model){
 		SocialForceModel *sfModel = (SocialForceModel*)model;
-		float cMass = 100;
+		double cMass = 100;
 
 		SocialForceAgentData dataLocal = *(SocialForceAgentData*)this->data;
 
 		const float2& loc = dataLocal.loc;
-		const float2& goal = dataLocal.goal;
-		const float2& velo = dataLocal.velocity;
-		const float& v0 = dataLocal.v0;
-		const float& mass = dataLocal.mass;
+		const double2& goal = dataLocal.goal;
+		const double2& velo = dataLocal.velocity;
+		const double& v0 = dataLocal.v0;
+		const double& mass = dataLocal.mass;
 
 		//compute the direction
-		float2 dvt;
+		double2 dvt;
 		computeDirection(dataLocal, dvt);
 
 		//compute force with other agents
-		float2 fSum; 
+		double2 fSum; 
 		computeSocialForce(dataLocal, fSum);
 
 		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
@@ -682,32 +682,32 @@ public:
 			printf("dvt: (%f, %f)\n", dvt.x, dvt.y);
 		}
 
-		float2 newVelo = dataLocal.velocity;
+		double2 newVelo = dataLocal.velocity;
 		float2 newLoc = dataLocal.loc;
-		float2 newGoal = dataLocal.goal;
+		double2 newGoal = dataLocal.goal;
 
 		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
 			printf("oldVelo: (%f, %f)\n", newVelo.x, newVelo.y);
 		}
 
-		float tick = 0.1;
+		double tick = 0.1;
 		newVelo.x += dvt.x * tick * (1);// + this->random->gaussian() * 0.1);
 		newVelo.y += dvt.y * tick * (1);// + this->random->gaussian() * 0.1);
-		float dv = sqrt(newVelo.x * newVelo.x + newVelo.y * newVelo.y);
-
-		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
-			printf("dv: %f\n", dv);
-			printf("newVelo: (%f, %f)\n", newVelo.x, newVelo.y);
-		}
+		double dv = sqrt(newVelo.x * newVelo.x + newVelo.y * newVelo.y);
 
 		if (dv > maxv) {
 			newVelo.x = newVelo.x * maxv / dv;
 			newVelo.y = newVelo.y * maxv / dv;
 		}
 
-		float mint = 1;
+		double mint = 1;
 		computeWallImpaction(dataLocal, myWall[0], newVelo, tick, mint);
 		computeWallImpaction(dataLocal, myWall[1], newVelo, tick, mint);
+		
+		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
+			printf("dv: %f\n", dv);
+			printf("newVelo: (%f, %f)\n", newVelo.x, newVelo.y);
+		}
 
 		newVelo.x *= mint;
 		newVelo.y *= mint;
@@ -719,7 +719,7 @@ public:
 			printf("newVelo: (%f, %f)\n", newVelo.x, newVelo.y);
 		}
 
-		float goalTemp = goal.x;
+		double goalTemp = goal.x;
 
 		if (goal.x < 0.5 * modelDevParams.WIDTH
 			&& (newLoc.x - mass/cMass <= 0.25 * modelDevParams.WIDTH) 
@@ -794,9 +794,9 @@ public:
 		dataLocal.loc.x = (0.25 + 0.5 * this->random->uniform()) * modelDevParams.WIDTH - 0.1;
 		dataLocal.loc.y = this->random->uniform() * modelDevParams.HEIGHT;
 #else
-		float sqrtNumAgent = sqrt((float)numAgent);
-		float x = (float)(dataSlot % (int)sqrtNumAgent) / sqrtNumAgent;
-		float y = (float)(dataSlot / (int)sqrtNumAgent) / sqrtNumAgent;
+		double sqrtNumAgent = sqrt((double)numAgent);
+		double x = (double)(dataSlot % (int)sqrtNumAgent) / sqrtNumAgent;
+		double y = (double)(dataSlot / (int)sqrtNumAgent) / sqrtNumAgent;
 		dataLocal.loc.x = (0.3 + x * 0.4) * modelDevParams.WIDTH;
 		dataLocal.loc.y = y * modelDevParams.HEIGHT;
 #endif
@@ -807,8 +807,8 @@ public:
 		dataLocal.mass = 50;
 
 
-		float2 goal1 = make_float2(0.25 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
-		float2 goal2 = make_float2(0.75 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
+		double2 goal1 = make_double2(0.25 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
+		double2 goal2 = make_double2(0.75 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
 #ifdef NDEBUG
 		if(dataLocal.loc.x < (0.75 - 0.5 * CLONE_PERCENT) * modelDevParams.WIDTH) {
 			dataLocal.goal = goal1;
@@ -940,15 +940,15 @@ __global__ void compareOriginAndClone(
 
 		bool match;
 		//compare equivalence of two copies of data;
-#define DELTA FLT_EPSILON
-		float diffLocX = clonedAgData.loc.x - originalAgData.loc.x;
-		float diffLocY = clonedAgData.loc.y - originalAgData.loc.y;
-		float diffVelX = clonedAgData.velocity.x - originalAgData.velocity.x;
-		float diffVelY = clonedAgData.velocity.y - originalAgData.velocity.y;
-		match = (diffLocX * diffLocX <= DELTA)
-			&& (diffLocY * diffLocY <= DELTA)
-			&& (diffVelX * diffVelX <= DELTA)
-			&& (diffVelY * diffVelY <= DELTA); 
+#define DELTA DBL_EPSILON
+		double diffLocX = abs(clonedAgData.loc.x - originalAgData.loc.x);
+		double diffLocY = abs(clonedAgData.loc.y - originalAgData.loc.y);
+		double diffVelX = abs(clonedAgData.velocity.x - originalAgData.velocity.x);
+		double diffVelY = abs(clonedAgData.velocity.y - originalAgData.velocity.y);
+		match = (diffLocX <= DELTA)
+			&& (diffLocY <= DELTA)
+			&& (diffVelX <= DELTA)
+			&& (diffVelY <= DELTA); 
 			//&& (clonedAgData.goal.x - originalAgData.goal.x == DELTA)
 			//&& (clonedAgData.goal.y - originalAgData.goal.y == DELTA);
 		if (match) {
