@@ -164,6 +164,9 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <CudaCompile Include="kernel.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\gsim\gsimcore.cuh" />
+    <ClInclude Include="..\gsim\gsimlib_header.cuh" />
+    <ClInclude Include="..\gsim\gsimvisual.cuh" />
     <ClInclude Include="gsimclone.cuh" />
     <ClInclude Include="socialForce.cuh" />
   </ItemGroup>

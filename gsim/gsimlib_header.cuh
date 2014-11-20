@@ -2,6 +2,7 @@
 #define LIB_HEADER_H
 
 #include <stdio.h>
+#include <time.h>
 #include <fstream>
 #include <string>
 #include <iostream>
