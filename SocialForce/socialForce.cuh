@@ -20,10 +20,8 @@ typedef struct SocialForceAgentData : public GAgentData_t {
 	double v0;
 	double mass;
 	//for debug
-#ifdef VALIDATE
 	int id;
 	int neibCount;
-#endif
 	__device__ void putDataInSmem(GAgent *ag);
 };
 
@@ -52,7 +50,7 @@ struct obstacleLine
 	{
 		double d = DIST(sx, sy, ex, ey);
 		double t0 = ((ex - sx) * (loc.x - sx) + (ey - sy) * (loc.y - sy)) / (d * d);
-
+	
 		if(t0 < 0){
 			d = sqrt((loc.x - sx) * (loc.x - sx) + (loc.y - sy) * (loc.y - sy));
 		}else if(t0 > 1){
@@ -107,13 +105,14 @@ struct obstacleLine
 #define	maxv 3
 
 #define NUM_CLONE 2
-#define NUM_WALLS 20
+#define NUM_WALLS 14
 #define CHOSEN_CLONE_ID NUM_CLONE
 __constant__ int numAgent;
 __constant__ obstacleLine holeB;
 __constant__ obstacleLine walls[NUM_WALLS];
 __constant__ double gateSizes[NUM_CLONE]; 
 __constant__ uchar4 colors[NUM_CLONE];
+
 #define GATE_LINE_NUM 2
 #define LEFT_GATE_SIZE 2
 #ifdef CLONE
@@ -133,9 +132,9 @@ int throughputHost;
 #endif
 
 #ifdef _DEBUG
-SocialForceAgentData *dataHost;
-SocialForceAgentData *dataCopyHost;
-int *dataIdxArrayHost;
+	SocialForceAgentData *dataHost;
+	SocialForceAgentData *dataCopyHost;
+	int *dataIdxArrayHost;
 #endif
 
 __global__ void addAgentsOnDevice(SocialForceModel *sfModel);
@@ -150,8 +149,6 @@ __global__ void compareOriginAndClone(AgentPool<SocialForceAgent, SocialForceAge
 class SocialForceClone {
 private:
 	static int cloneCount;
-	cudaStream_t poolStream;
-	cudaEvent_t timerStart, timerStop;
 public:
 	AgentPool<SocialForceAgent, SocialForceAgentData> *agents, *agentsHost;
 	GWorld *clonedWorld, *clonedWorldHost;
@@ -159,13 +156,9 @@ public:
 	int cloneid;
 
 	__host__ SocialForceClone(int num) {
-		cudaStreamCreate(&poolStream);
-		cudaEventCreate(&timerStart);
-		cudaEventCreate(&timerStop);
-		cudaEventRecord(timerStart, poolStream);
-		agentsHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(0, num, sizeof(SocialForceAgentData), &poolStream);
+		agentsHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(0, num, sizeof(SocialForceAgentData));
 		util::hostAllocCopyToDevice<AgentPool<SocialForceAgent, SocialForceAgentData> >(agentsHost, &agents);
-
+		
 		clonedWorldHost = new GWorld();
 		util::hostAllocCopyToDevice<GWorld>(clonedWorldHost, &clonedWorld);
 
@@ -187,18 +180,15 @@ class SocialForceModel : public GModel {
 public:
 	GRandom *random, *randomHost;
 	cudaEvent_t timerStart, timerStop;
-	cudaStream_t poolStream;
 
 	AgentPool<SocialForceAgent, SocialForceAgentData> *originalAgents, *originalAgentsHost;
 
 	std::fstream fout;
 #ifdef CLONE
 	SocialForceClone *clones[NUM_CLONE];
-
 #endif
 
 	__host__ SocialForceModel(char **modelArgs) {
-		cudaStreamCreate(&poolStream);
 		int num = modelHostParams.AGENT_NO;
 		char *outfname = new char[30];
 #ifdef _DEBUG
@@ -250,7 +240,7 @@ public:
 		cudaMemcpyToSymbol(holeB, &holeHost, sizeof(obstacleLine));
 
 		//init agent pool
-		originalAgentsHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(num, modelHostParams.MAX_AGENT_NO, sizeof(SocialForceAgentData), &poolStream);
+		originalAgentsHost = new AgentPool<SocialForceAgent, SocialForceAgentData>(num, modelHostParams.MAX_AGENT_NO, sizeof(SocialForceAgentData));
 		util::hostAllocCopyToDevice<AgentPool<SocialForceAgent, SocialForceAgentData> >(originalAgentsHost, &originalAgents);
 
 		//init world
@@ -280,7 +270,7 @@ public:
 		dataHost = (SocialForceAgentData*)malloc(sizeof(SocialForceAgentData) * numAgentLocal);
 		dataCopyHost = (SocialForceAgentData*)malloc(sizeof(SocialForceAgentData) * numAgentLocal);
 		dataIdxArrayHost = new int[numAgentLocal];
-#elif defined(VALIDATE)
+#else
 		throughputHost = 0;
 		cudaMemcpyToSymbol(throughput, &throughputHost, sizeof(int));
 #endif
@@ -328,7 +318,7 @@ public:
 		int numAgentLocal = this->originalAgentsHost->numElem;
 		//1. run the original copy
 		this->originalAgentsHost->registerPool(this->worldHost, this->schedulerHost, this->originalAgents);
-		util::genNeighbor(this->world, this->worldHost, this->originalAgentsHost->numElem, 0);
+		util::genNeighbor(this->world, this->worldHost, this->originalAgentsHost->numElem);
 		cudaMemcpyToSymbol(modelDevParams, &modelHostParams, sizeof(modelConstants));
 		this->originalAgentsHost->stepPoolAgent(this->model);
 
@@ -340,79 +330,75 @@ public:
 #endif
 
 		//debug info, print the real data of original agents and cloned agents, or throughputs
-#if defined(_DEBUG) && defined(VALIDATE)
-		//if (stepCountHost != MONITOR_STEP)
-		//goto SKIP_DEBUG_OUT_OF_AGENT_ARRAY;
-		fout<<"step:"<<stepCountHost<<std::endl;
-		int numElemHost = this->originalAgentsHost->numElem;
+#if defined(_DEBUG)
+			//if (stepCountHost != MONITOR_STEP)
+			//goto SKIP_DEBUG_OUT_OF_AGENT_ARRAY;
+			fout<<"step:"<<stepCountHost<<std::endl;
+			int numElemHost = this->originalAgentsHost->numElem;
 
-		if (stepCountHost % 2 == 0)
-			cudaMemcpy(dataHost, this->originalAgentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-		else
-			cudaMemcpy(dataHost, this->originalAgentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
+			if (stepCountHost % 2 == 0)
+				cudaMemcpy(dataHost, this->originalAgentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
+			else
+				cudaMemcpy(dataHost, this->originalAgentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
 
-		cudaMemcpy(dataIdxArrayHost, this->originalAgentsHost->dataIdxArray, sizeof(int) * numAgentLocal, cudaMemcpyDeviceToHost);
+			cudaMemcpy(dataIdxArrayHost, this->originalAgentsHost->dataIdxArray, sizeof(int) * numAgentLocal, cudaMemcpyDeviceToHost);
 
-		for(int i = 0; i < numElemHost; i ++) {
-			int dataIdx = dataIdxArrayHost[i];
-			fout << dataHost[dataIdx].id
-				<< "\t" << dataHost[dataIdx].neibCount 
-				<< "\t" << dataHost[dataIdx].loc.x 
-				<< "\t" << dataHost[dataIdx].loc.y 
-				<< "\t"	<< dataHost[dataIdx].velocity.x 
-				<< "\t" << dataHost[dataIdx].velocity.y 
-				<< "\t" << std::endl;
-			fout.flush();
-		}
-		fout <<"-------------------"<<std::endl;
+			for(int i = 0; i < numElemHost; i ++) {
+				int dataIdx = dataIdxArrayHost[i];
+				fout << dataHost[dataIdx].id
+					<< "\t" << dataHost[dataIdx].neibCount 
+					<< "\t" << dataHost[dataIdx].loc.x 
+					<< "\t" << dataHost[dataIdx].loc.y 
+					<< "\t"	<< dataHost[dataIdx].velocity.x 
+					<< "\t" << dataHost[dataIdx].velocity.y 
+					<< "\t" << std::endl;
+				fout.flush();
+			}
+			fout <<"-------------------"<<std::endl;
 
 #if defined(CLONE)
-		numElemHost = this->clone1->agentsHost->numElem;
-		//std::cout<<" "<<numElemHost<<std::endl;
-		SocialForceClone *clone1 = clones[0];
-		if (stepCountHost % 2 == 0) {
-			cudaMemcpy(dataHost, clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-			cudaMemcpy(dataCopyHost, clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-		} else {
-			cudaMemcpy(dataHost, clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-			cudaMemcpy(dataCopyHost, clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-		}
+			numElemHost = this->clone1->agentsHost->numElem;
+			//std::cout<<" "<<numElemHost<<std::endl;
+			if (stepCountHost % 2 == 0) {
+				cudaMemcpy(dataHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
+			} else {
+				cudaMemcpy(dataHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
+				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
+			}
 
-		cudaMemcpy(dataIdxArrayHost, clone1->agentsHost->dataIdxArray, sizeof(int) * numAgentLocal, cudaMemcpyDeviceToHost);
+			cudaMemcpy(dataIdxArrayHost, this->clone1->agentsHost->dataIdxArray, sizeof(int) * numAgentLocal, cudaMemcpyDeviceToHost);
 
-		for(int i = 0; i < numElemHost; i ++) {
-			int dataIdx = dataIdxArrayHost[i];
-			fout << dataHost[dataIdx].id
-				<< "\t" << dataHost[dataIdx].neibCount 
-				<< "\t" << dataHost[dataIdx].loc.x 
-				<< "\t" << dataHost[dataIdx].loc.y
-				<< "\t"	<< dataHost[dataIdx].velocity.x 
-				<< "\t" << dataHost[dataIdx].velocity.y 
-				<< "\t" << std::endl;
+			for(int i = 0; i < numElemHost; i ++) {
+				int dataIdx = dataIdxArrayHost[i];
+				fout << dataHost[dataIdx].id
+					<< "\t" << dataHost[dataIdx].neibCount 
+					<< "\t" << dataHost[dataIdx].loc.x 
+					<< "\t" << dataHost[dataIdx].loc.y
+					<< "\t"	<< dataHost[dataIdx].velocity.x 
+					<< "\t" << dataHost[dataIdx].velocity.y 
+					<< "\t" << std::endl;
+				fout.flush();
+			}
+			//fout <<"-------------------"<<std::endl;
+			//for(int i = 0; i < numElemHost; i ++) {
+			//	int dataIdx = dataIdxArrayHost[i];
+			//	fout << dataCopyHost[dataIdx].id
+			//		<< "\t" << dataCopyHost[dataIdx].loc.x 
+			//		<< "\t" << dataCopyHost[dataIdx].loc.y
+			//		<< "\t"	<< dataCopyHost[dataIdx].velocity.x 
+			//		<< "\t" << dataCopyHost[dataIdx].velocity.y 
+			//		<< "\t" << std::endl;
+			//	fout.flush();
+			//}
+			fout <<"==================="<<std::endl<<std::endl;
 			fout.flush();
-		}
-		//fout <<"-------------------"<<std::endl;
-		//for(int i = 0; i < numElemHost; i ++) {
-		//	int dataIdx = dataIdxArrayHost[i];
-		//	fout << dataCopyHost[dataIdx].id
-		//		<< "\t" << dataCopyHost[dataIdx].loc.x 
-		//		<< "\t" << dataCopyHost[dataIdx].loc.y
-		//		<< "\t"	<< dataCopyHost[dataIdx].velocity.x 
-		//		<< "\t" << dataCopyHost[dataIdx].velocity.y 
-		//		<< "\t" << std::endl;
-		//	fout.flush();
-		//}
-		fout <<"==================="<<std::endl<<std::endl;
-		fout.flush();
 #endif
 
-#elif defined(VALIDATE)
+#else
 		cudaMemcpyFromSymbol(&throughputHost, throughput, sizeof(int));
 		fout<<throughputHost<<std::endl;
 		fout.flush();
-		for (int i = 0; i < NUM_CLONE; i++) {
-			printf("numAgent:clone %d: %d\n", clones[i]->agentsHost->numElem);
-		}
 #endif
 
 		//5. swap data and dataCopy
@@ -450,84 +436,41 @@ public:
 #ifdef CLONE
 int SocialForceClone::cloneCount = 1;
 __host__ void SocialForceClone::step(SocialForceAgent** originalAgents, int num, SocialForceModel *modelHost) {
-	float oldTime = 0, time = 0;
-	cudaEventRecord(timerStop, poolStream);
-	cudaStreamSynchronize(poolStream);
-	cudaEventElapsedTime(&time, timerStart, timerStop);
-	printf("clone: %d, stage 0, time: %f\n", cloneid, time-oldTime);
-	oldTime = time;
 
 	//1.1 clone agents
 	int numAgentLocal = num;
 	int gSize = GRID_SIZE(numAgentLocal);
-	cloneKernel<<<gSize, BLOCK_SIZE, 0, poolStream>>>(originalAgents, agents, numAgentLocal, clonedWorld, cloneid);
-
-	cudaEventRecord(timerStop, poolStream);
-	cudaStreamSynchronize(poolStream);	
-	cudaEventElapsedTime(&time, timerStart, timerStop);
-	printf("clone: %d, stage 1, time: %f\n", cloneid, time-oldTime);
-	oldTime = time;
+	cloneKernel<<<gSize, BLOCK_SIZE>>>(originalAgents, agents, numAgentLocal, clonedWorld, cloneid);
 
 	//2. run the cloned copy
 	//2.1. register the cloned agents to the c1loned world
-	cudaMemcpyAsync(clonedWorldHost->allAgents,
+	cudaMemcpy(clonedWorldHost->allAgents,
 		agentPtrArrayUnsorted, 
 		num * sizeof(void*), 
-		cudaMemcpyDeviceToDevice,
-		poolStream);
+		cudaMemcpyDeviceToDevice);
 
 	this->agentsHost->cleanup(this->agents);
 	int numAgentsB = this->agentsHost->numElem;
 	if (numAgentsB != 0) {
 		gSize = GRID_SIZE(numAgentsB);
 
-		replaceOriginalWithClone<<<gSize, BLOCK_SIZE, 0, poolStream>>>(
+		replaceOriginalWithClone<<<gSize, BLOCK_SIZE>>>(
 			clonedWorldHost->allAgents, 
 			this->agentsHost->agentPtrArray, 
 			numAgentsB);
 
-		cudaEventRecord(timerStop, poolStream);
-		cudaStreamSynchronize(poolStream);		
-		cudaEventElapsedTime(&time, timerStart, timerStop);
-		printf("clone: %d, stage 2.1, time: %f\n", cloneid, time-oldTime);
-		oldTime = time;
-
 		//2.2. sort world and worldClone
-		util::genNeighbor(this->clonedWorld, this->clonedWorldHost, modelHostParams.AGENT_NO, poolStream);
-
-		cudaEventRecord(timerStop, poolStream);
-		cudaStreamSynchronize(poolStream);		
-		cudaEventElapsedTime(&time, timerStart, timerStop);
-		printf("clone: %d, stage 2.2, time: %f\n", cloneid, time-oldTime);
-		oldTime = time;
+		util::genNeighbor(this->clonedWorld, this->clonedWorldHost, modelHostParams.AGENT_NO);
 
 		//2.3. step the cloned copy
 		this->agentsHost->stepPoolAgent(modelHost->model);
 
-		cudaEventRecord(timerStop, poolStream);
-		cudaStreamSynchronize(poolStream);		
-		cudaEventElapsedTime(&time, timerStart, timerStop);
-		printf("clone: %d, stage 2.3, time: %f\n", cloneid, time-oldTime);
-		oldTime = time;
-
 #ifdef CLONE_COMPARE
 		//3. double check
-		compareOriginAndClone<<<gSize, BLOCK_SIZE, 0, poolStream>>>(this->agents, clonedWorld, numAgentsB, cloneid);
-
-		cudaEventRecord(timerStop, poolStream);
-		cudaStreamSynchronize(poolStream);		
-		cudaEventElapsedTime(&time, timerStart, timerStop);
-		printf("clone: %d, stage 3, time: %f\n", cloneid, time-oldTime);
-		oldTime = time;
+		compareOriginAndClone<<<gSize, BLOCK_SIZE>>>(this->agents, clonedWorld, numAgentsB, cloneid);
 
 		//4. clean pool again, since some agents are removed
 		this->agentsHost->cleanup(this->agents);
-
-		cudaEventRecord(timerStop, poolStream);
-		cudaStreamSynchronize(poolStream);		
-		cudaEventElapsedTime(&time, timerStart, timerStop);
-		printf("clone: %d, stage 4, time: %f\n", cloneid, time-oldTime);
-		oldTime = time;
 #endif
 
 		getLastCudaError("step:clone");
@@ -602,7 +545,7 @@ public:
 	__device__ void computeForceWithWall(const SocialForceAgentData &dataLocal, obstacleLine &wall, const int &cMass, double2 &fSum) {
 		double diw, crx, cry;
 		const float2 &loc = dataLocal.loc;
-
+		
 		diw = wall.pointToLineDist(loc, crx, cry, this->id);
 		double virDiw = DIST(loc.x, loc.y, crx, cry);
 
@@ -658,7 +601,7 @@ public:
 		const double2& velo = dataLocal.velocity;
 		const double& v0 = dataLocal.v0;
 		const double& mass = dataLocal.mass;
-
+		
 		dvt.x = 0;	dvt.y = 0;
 		double2 diff; diff.x = 0; diff.y = 0;
 		double d0 = sqrt((loc.x - goal.x) * (loc.x - goal.x) + (loc.y - goal.y) * (loc.y - goal.y));
@@ -696,12 +639,13 @@ public:
 #endif
 				/*
 				if (stepCount == 0 && dataLocal.id == 263) {
-				printf("%d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, otherDataLocal.id, otherDataLocal.loc.x, otherDataLocal.loc.y, otherDataLocal.velocity.x, otherDataLocal.velocity.y, otherDataLocal.goal.x, otherDataLocal.goal.y);
+					printf("%d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, otherDataLocal.id, otherDataLocal.loc.x, otherDataLocal.loc.y, otherDataLocal.velocity.x, otherDataLocal.velocity.y, otherDataLocal.goal.x, otherDataLocal.goal.y);
 				}
 				*/
 			}
 			otherData = world->nextAgentDataFromSharedMem<SocialForceAgentData>(info);
 		}
+		dataLocal.neibCount = neighborCount;
 	}
 
 	__device__ void step(GModel *model){
@@ -724,24 +668,21 @@ public:
 		double2 fSum; 
 		computeSocialForce(dataLocal, fSum);
 
-#ifdef VALIDATE
 		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
 			printf("fSum: (%f, %f)\n", fSum.x, fSum.y);
 		}
-#endif
 
 		//compute force with wall
 		computeForceWithWall(dataLocal, myWall[0], cMass, fSum);
 		computeForceWithWall(dataLocal, myWall[1], cMass, fSum);
-#ifdef VALIDATE
+
 		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
 			printf("fSum: (%f, %f)\n", fSum.x, fSum.y);
 		}
-#endif
 
 #ifdef CLONE
 		//decision point A: impaction from wall
-		if(holeB.pointToLineDist(loc) < 0.01) {
+		if(holeB.pointToLineDist(loc) < 20) {
 			for (int i = 0; i < NUM_CLONE; i++)
 				if (this->cloned[i] == false)
 					this->cloning[i] = true;
@@ -752,20 +693,17 @@ public:
 		dvt.x += fSum.x / mass;
 		dvt.y += fSum.y / mass;
 
-#ifdef VALIDATE
 		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
 			printf("dvt: (%f, %f)\n", dvt.x, dvt.y);
 		}
-#endif
 
 		double2 newVelo = dataLocal.velocity;
 		float2 newLoc = dataLocal.loc;
 		double2 newGoal = dataLocal.goal;
-#ifdef VALIDATE
+
 		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
 			printf("oldVelo: (%f, %f)\n", newVelo.x, newVelo.y);
 		}
-#endif
 
 		double tick = 0.1;
 		newVelo.x += dvt.x * tick * (1);// + this->random->gaussian() * 0.1);
@@ -780,24 +718,21 @@ public:
 		double mint = 1;
 		computeWallImpaction(dataLocal, myWall[0], newVelo, tick, mint);
 		computeWallImpaction(dataLocal, myWall[1], newVelo, tick, mint);
-#ifdef VALIDATE
+		
 		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
 			printf("dv: %f\n", dv);
 			printf("newVelo: (%f, %f)\n", newVelo.x, newVelo.y);
 		}
-#endif
 
 		newVelo.x *= mint;
 		newVelo.y *= mint;
 		newLoc.x += newVelo.x * tick;
 		newLoc.y += newVelo.y * tick;
 
-#ifdef VALIDATE
 		if (stepCount == MONITOR_STEP && this->id == MONITOR_ID) {
 			printf("mint: %f\n", mint);
 			printf("newVelo: (%f, %f)\n", newVelo.x, newVelo.y);
 		}
-#endif
 
 		double goalTemp = goal.x;
 
@@ -815,7 +750,6 @@ public:
 			&& (newLoc.y - mass/cMass < 0.5 * modelDevParams.HEIGHT + gateSize)) 
 		{
 			newGoal.x = modelDevParams.WIDTH;
-#ifdef VALIDATE
 #ifdef CLONE
 			if (goalTemp != newGoal.x && this->cloneid == CHOSEN_CLONE_ID) 
 #else
@@ -824,7 +758,6 @@ public:
 			{
 				atomicInc(&throughput, 8192);
 			}
-#endif
 		}
 
 		newLoc.x = correctCrossBoader(newLoc.x, modelDevParams.WIDTH);
@@ -835,14 +768,12 @@ public:
 		dataCopyLocal.velocity = newVelo;
 		dataCopyLocal.goal = newGoal;
 
-
-#ifdef VALIDATE
+		
 		if (stepCount == MONITOR_STEP && dataLocal.id == MONITOR_ID) {
 			printf("BEF: %d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, dataLocal.id, dataLocal.loc.x, dataLocal.loc.y, dataLocal.velocity.x, dataLocal.velocity.y, dataLocal.goal.x, dataLocal.goal.y);
 			printf("AFT: %d, %d, [%f, %f], [%f, %f], [%f, %f]\n", stepCount, dataCopyLocal.id, dataCopyLocal.loc.x, dataCopyLocal.loc.y, dataCopyLocal.velocity.x, dataCopyLocal.velocity.y, dataCopyLocal.goal.x, dataCopyLocal.goal.y);
 		}
-#endif
-
+		
 
 		*(SocialForceAgentData*)this->dataCopy = dataCopyLocal;
 	}
@@ -873,7 +804,7 @@ public:
 		SocialForceAgentData dataLocal; //= &sfModel->originalAgents->dataArray[dataSlot];
 
 		dataLocal.agentPtr = this;
-		//dataLocal.id = dataSlot;
+		dataLocal.id = dataSlot;
 #ifdef NDEBUG
 		dataLocal.loc.x = (0.25 + 0.5 * this->random->uniform()) * modelDevParams.WIDTH - 0.1;
 		dataLocal.loc.y = this->random->uniform() * modelDevParams.HEIGHT;
@@ -1029,8 +960,8 @@ __global__ void compareOriginAndClone(
 			&& (diffLocY <= DELTA)
 			&& (diffVelX <= DELTA)
 			&& (diffVelY <= DELTA); 
-		//&& (clonedAgData.goal.x - originalAgData.goal.x == DELTA)
-		//&& (clonedAgData.goal.y - originalAgData.goal.y == DELTA);
+			//&& (clonedAgData.goal.x - originalAgData.goal.x == DELTA)
+			//&& (clonedAgData.goal.y - originalAgData.goal.y == DELTA);
 		if (match) {
 			//remove from cloned set, reset clone state to non-cloned
 			clonedPool->remove(idx);
@@ -1039,15 +970,15 @@ __global__ void compareOriginAndClone(
 			originalAg->cloning[cloneidLocal] = false;
 		}
 		/*
-		#ifdef _DEBUG
+#ifdef _DEBUG
 		else {
-		originalAg->color = colorConfigs.blue;
-		printf("step: %d\n", stepCount);
-		printf("\t origin:%d, clone:%d", originalAgData.id, clonedAgData.id);
-		printf("\t diffLocSqr:[%f, %f]", diffLocX * diffLocX, diffLocY * diffLocY);
-		printf("\t diffVelSqr:[%f, %f]", diffVelX * diffVelX, diffVelY * diffVelY);
+			originalAg->color = colorConfigs.blue;
+			printf("step: %d\n", stepCount);
+			printf("\t origin:%d, clone:%d", originalAgData.id, clonedAgData.id);
+			printf("\t diffLocSqr:[%f, %f]", diffLocX * diffLocX, diffLocY * diffLocY);
+			printf("\t diffVelSqr:[%f, %f]", diffVelX * diffVelX, diffVelY * diffVelY);
 		}
-		#endif
+#endif
 		*/
 	}
 }

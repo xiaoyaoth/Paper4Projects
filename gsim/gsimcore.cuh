@@ -34,7 +34,7 @@ __constant__ int stepCount;
 
 
 namespace util{
-	void genNeighbor(GWorld *world, GWorld *world_h, int numAgent, cudaStream_t poolStream);
+	void genNeighbor(GWorld *world, GWorld *world_h, int numAgent);
 
 	template<class Type> void hostAllocCopyToDevice(Type *hostPtr, Type **devicePtr);
 	__device__ int zcode(int x, int y);
@@ -251,7 +251,7 @@ __global__ void initRandom(GRandom *random, int nElemMax)
 
 template<class Agent, class AgentData> class AgentPool
 {
-	cudaStream_t *poolStream;
+	cudaStream_t poolStream;
 public:
 	size_t shareDataSize;
 	/* objects to be deleted will be marked as delete */
@@ -384,13 +384,12 @@ public:
 			agentPoolUtil::swapKernel<<<gSize, BLOCK_SIZE>>>(numElem, agentPtrArray);
 		}
 	}
-	__host__ AgentPool(int nElem, int nElemMax, size_t sizeOfSharedData, cudaStream_t *pStream){
+	__host__ AgentPool(int nElem, int nElemMax, size_t sizeOfSharedData){
 		if (nElemMax < nElem)
 			nElemMax = nElem;
 		this->shareDataSize = sizeOfSharedData + sizeof(int);
 		this->shareDataSize *= BLOCK_SIZE;
-		//cudaStreamCreate(&poolStream);
-		this->poolStream = pStream;
+		cudaStreamCreate(&poolStream);
 		this->alloc(nElem, nElemMax);
 		int gSize = GRID_SIZE(nElemMax);
 		agentPoolUtil::initPoolIdxArray<<<gSize, BLOCK_SIZE>>>(dataIdxArray, delMark, nElemMax);
@@ -400,7 +399,7 @@ public:
 		if (numElem <= 0)
 			return 0;
 		int gSize = GRID_SIZE(numElem);
-		agentPoolUtil::stepKernel<<<gSize, BLOCK_SIZE, this->shareDataSize, *poolStream>>>(numElem, this->agentPtrArray, model);
+		agentPoolUtil::stepKernel<<<gSize, BLOCK_SIZE, this->shareDataSize, poolStream>>>(numElem, this->agentPtrArray, model);
 		return numElem;
 	}
 };
@@ -681,21 +680,21 @@ void sortHash(int *hash, GAgent **ptrArray, int numAgent)
 	ValIter val_begin(id_ptr);
 	thrust::sort_by_key(key_begin, key_end, val_begin);
 }
-void util::genNeighbor(GWorld *world, GWorld *world_h, int numAgent, cudaStream_t poolStream)
+void util::genNeighbor(GWorld *world, GWorld *world_h, int numAgent)
 {
 	if (world != NULL) {
 		int bSize = BLOCK_SIZE;
 		int gSize = GRID_SIZE(numAgent);
 
-		cudaMemsetAsync(hash, 0xff, numAgent * sizeof(int), poolStream);
-		cudaMemsetAsync(world_h->cellIdxStart, 0xff, modelHostParams.CELL_NO*sizeof(int), poolStream);
-		cudaMemsetAsync(world_h->cellIdxEnd, 0xff, modelHostParams.CELL_NO*sizeof(int), poolStream);
+		cudaMemset(hash, 0xff, numAgent * sizeof(int));
+		cudaMemset(world_h->cellIdxStart, 0xff, modelHostParams.CELL_NO*sizeof(int));
+		cudaMemset(world_h->cellIdxEnd, 0xff, modelHostParams.CELL_NO*sizeof(int));
 
-		generateHash<<<gSize, bSize, 0, poolStream>>>(hash, world_h->allAgents, pos, numAgent);
+		generateHash<<<gSize, bSize>>>(hash, world_h->allAgents, pos, numAgent);
 		if(cudaSuccess != cudaGetLastError()) { errorHandler(world_h); }
 		sortHash(hash, world_h->allAgents, numAgent);
 		if(cudaSuccess != cudaGetLastError()) { errorHandler(world_h); }
-		generateCellIdx<<<gSize, bSize, 0, poolStream>>>(hash, world, numAgent);
+		generateCellIdx<<<gSize, bSize>>>(hash, world, numAgent);
 		if(cudaSuccess != cudaGetLastError()) { errorHandler(world_h); }
 	}
 }
