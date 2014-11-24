@@ -251,7 +251,6 @@ __global__ void initRandom(GRandom *random, int nElemMax)
 
 template<class Agent, class AgentData> class AgentPool
 {
-	cudaStream_t poolStream;
 public:
 	size_t shareDataSize;
 	/* objects to be deleted will be marked as delete */
@@ -389,12 +388,11 @@ public:
 			nElemMax = nElem;
 		this->shareDataSize = sizeOfSharedData + sizeof(int);
 		this->shareDataSize *= BLOCK_SIZE;
-		cudaStreamCreate(&poolStream);
 		this->alloc(nElem, nElemMax);
 		int gSize = GRID_SIZE(nElemMax);
 		agentPoolUtil::initPoolIdxArray<<<gSize, BLOCK_SIZE>>>(dataIdxArray, delMark, nElemMax);
 	}
-	__host__ int stepPoolAgent(GModel *model)
+	__host__ int stepPoolAgent(GModel *model, cudaStream_t poolStream)
 	{
 		if (numElem <= 0)
 			return 0;
@@ -943,7 +941,5 @@ void doLoop(GModel *mHost){
 	mHost->stop();
 	cudaFree(hash);
 	printf("finally total agent is %d\n", modelHostParams.AGENT_NO);
-	system("PAUSE");
-
 }
 #endif

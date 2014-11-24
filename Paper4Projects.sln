@@ -9,6 +9,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GraphCPP", "GraphCPP\GraphC
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SocialForce", "SocialForce\SocialForce.vcxproj", "{6C3B88B2-6E30-4E65-811C-EB371A3A5ED6}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestStream", "TestStream\TestStream.vcxproj", "{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -45,6 +47,14 @@ Global
 		{6C3B88B2-6E30-4E65-811C-EB371A3A5ED6}.Release|Win32.Build.0 = Release|Win32
 		{6C3B88B2-6E30-4E65-811C-EB371A3A5ED6}.Release|x64.ActiveCfg = Release|x64
 		{6C3B88B2-6E30-4E65-811C-EB371A3A5ED6}.Release|x64.Build.0 = Release|x64
+		{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}.Debug|Win32.ActiveCfg = Debug|Win32
+		{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}.Debug|Win32.Build.0 = Debug|Win32
+		{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}.Debug|x64.ActiveCfg = Debug|x64
+		{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}.Debug|x64.Build.0 = Debug|x64
+		{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}.Release|Win32.ActiveCfg = Release|Win32
+		{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}.Release|Win32.Build.0 = Release|Win32
+		{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}.Release|x64.ActiveCfg = Release|x64
+		{C7CAB61D-9ED7-4A62-9FC0-23CC8CE1F7C0}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
