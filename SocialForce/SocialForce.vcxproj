@@ -169,6 +169,7 @@ copy "$(CudaToolkitBinDir)\cudart*.dll" "$(OutDir)"</Command>
     <ClInclude Include="..\gsim\gsimvisual.cuh" />
     <ClInclude Include="gsimclone.cuh" />
     <ClInclude Include="socialForce.cuh" />
+    <ClInclude Include="socialForceEnhanced.cuh" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Source.cpp" />

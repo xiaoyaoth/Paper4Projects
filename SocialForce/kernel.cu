@@ -6,12 +6,13 @@
 #include <sys/time.h>
 #endif
 //#include "test.cuh"
-#include "socialForce.cuh"
+//#include "socialForce.cuh"
+#include "socialForceEnhanced.cuh"
 int main(int argc, char *argv[]){
 	//argv[1]: config.txt
 	//argv[2]: numAgent
-	init<SocialForceAgentData>(argv[1]);
-	SocialForceModel *model_h = new SocialForceModel(&argv[2]);
+	init<SocialForceRoomAgentData>(argv[1]);
+	SocialForceRoomModel *model_h = new SocialForceRoomModel(&argv[2]);
 	/*Main work started here*/
 
 	cudaEvent_t start, stop;
@@ -26,5 +27,5 @@ int main(int argc, char *argv[]){
 	cudaEventRecord(stop, 0);
 	cudaEventSynchronize(stop);
 	cudaEventElapsedTime(&time, start, stop);
-	std::cout<<time<<std::endl;
+	printf("execution time: %f\n", time);
 }
