@@ -10,7 +10,7 @@ class SocialForceRoomModel;
 class SocialForceRoomAgent;
 class SocialForceRoomClone;
 
-//#define CLONE
+#define CLONE
 //#define _DEBUG
 //#define VALIDATE
 
@@ -107,7 +107,7 @@ struct obstacleLine
 __constant__ int numAgent;
 __constant__ obstacleLine holeB;
 __constant__ obstacleLine walls[NUM_WALLS];
-__constant__ double gateSizes[NUM_CLONE]; 
+__constant__ double gateSizes[NUM_CLONE * 9]; 
 __constant__ uchar4 colors[NUM_CLONE];
 
 #define GATE_LINE_NUM 2
@@ -229,7 +229,8 @@ public:
 		uchar4 *colorsHost = (uchar4*)malloc(sizeof(uchar4) * NUM_CLONE);
 		srand(time(NULL));
 		for (int i = 0; i < NUM_CLONE; i++) {
-			gateSizesHost[i] = i * 2 + 4;
+			gateSizesHost[i] = i * 2 + 2;
+			//gateSizesHost[i] = i * 2 + 4;
 			int r = rand();
 			memcpy(&colorsHost[i], &r, sizeof(uchar4));
 		}
@@ -239,36 +240,20 @@ public:
 
 		//init obstacles
 		obstacleLine gateHost[NUM_WALLS], holeHost;
-		/*
-		gateHost[0].init(0.25 * modelHostParams.WIDTH, -20, 0.25 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT - LEFT_GATE_SIZE);
-		gateHost[1].init(0.25 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + LEFT_GATE_SIZE, 0.25 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
-		gateHost[2].init(0.75 * modelHostParams.WIDTH, -20, 0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT - LEFT_GATE_SIZE);
-		gateHost[3].init(0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + LEFT_GATE_SIZE, 0.75 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
-
-		for (int i = 0; i < NUM_CLONE; i++) {
-			float gateSizeTemp = gateSizesHost[i];
-			gateHost[i * 2 + 4].init(0.75 * modelHostParams.WIDTH, -20, 0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT - gateSizeTemp);
-			gateHost[i * 2 + 5].init(0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT + gateSizeTemp, 0.75 * modelHostParams.WIDTH, modelHostParams.HEIGHT + 20);
-		}
-
-		for (int i = 0; i < NUM_WALLS; i++) {
-			gateHost[i].init(1,1,2,2);
-		}
-		*/
 
 		float wLocal = modelHostParams.WIDTH;
 		float hLocal = modelHostParams.HEIGHT;
 		float gLocal = LEFT_GATE_SIZE;
 		gateHost[0].init(0.1 * wLocal, 0.09 * hLocal, 0.1 * wLocal, 0.91 * hLocal );
 		gateHost[1].init(0.09 * wLocal, 0.1 * hLocal, 0.91 * wLocal, 0.1 * hLocal);
-		gateHost[2].init(0.9 * wLocal, 0.09 * hLocal, 0.9 * wLocal, 0.91 * hLocal + gLocal);
-		gateHost[3].init(0.9 * wLocal, 0.3 * hLocal - gLocal, 0.9 * wLocal, 0.91 * hLocal);
+		gateHost[2].init(0.9 * wLocal, 0.09 * hLocal, 0.9 * wLocal, 0.91 * hLocal + 0/*gLocal*/);
+		gateHost[3].init(0.9 * wLocal, 0.3 * hLocal - 0/*gLocal*/, 0.9 * wLocal, 0.91 * hLocal);
 		gateHost[4].init(0.09 * wLocal, 0.9 * hLocal, 0.91 * wLocal, 0.9 * hLocal);
-		gateHost[5].init(0.5 * wLocal, 0.91 * hLocal, 0.5 * wLocal, 0.7 * hLocal + gLocal);
-		gateHost[6].init(0.09 * wLocal, 0.5 * hLocal, 0.3 * wLocal - gLocal, 0.5 * hLocal);
-		gateHost[7].init(0.5 * wLocal, 0.09 * hLocal, 0.5 * wLocal, 0.3 * hLocal - gLocal);
-		gateHost[8].init(0.5 * wLocal, 0.3 * hLocal + gLocal, 0.5 * wLocal, 0.7 * hLocal - gLocal * 5);
-		gateHost[9].init(0.3 * wLocal + gLocal * 3, 0.5 * hLocal, 0.91 * wLocal, 0.5 * hLocal);
+		gateHost[5].init(0.5 * wLocal, 0.91 * hLocal, 0.5 * wLocal, 0.7 * hLocal + 0/*gLocal*/);
+		gateHost[6].init(0.09 * wLocal, 0.5 * hLocal, 0.3 * wLocal - 0/*gLocal*/, 0.5 * hLocal);
+		gateHost[7].init(0.5 * wLocal, 0.09 * hLocal, 0.5 * wLocal, 0.3 * hLocal - 0/*gLocal*/);
+		gateHost[8].init(0.5 * wLocal, 0.3 * hLocal + 0/*gLocal*/, 0.5 * wLocal, 0.7 * hLocal - 0/*gLocal*/ * 5);
+		gateHost[9].init(0.3 * wLocal + 0/*gLocal*/ * 3, 0.5 * hLocal, 0.91 * wLocal, 0.5 * hLocal);
 		cudaMemcpyToSymbol(walls, &gateHost, NUM_WALLS * sizeof(obstacleLine));
 
 		holeHost.init(	0.75 * modelHostParams.WIDTH, 0.5 * modelHostParams.HEIGHT - gateSizesHost[NUM_CLONE-1],
@@ -382,76 +367,6 @@ public:
 #endif
 
 		//debug info, print the real data of original agents and cloned agents, or throughputs
-#if defined(_DEBUG) && defined(VALIDATE)
-		//if (stepCountHost != MONITOR_STEP)
-			//goto SKIP_DEBUG_OUT_OF_AGENT_ARRAY;
-			fout<<"step:"<<stepCountHost<<std::endl;
-			int numElemHost = this->originalAgentsHost->numElem;
-
-			if (stepCountHost % 2 == 0)
-				cudaMemcpy(dataHost, this->originalAgentsHost->dataCopyArray, sizeof(SocialForceRoomAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-			else
-				cudaMemcpy(dataHost, this->originalAgentsHost->dataArray, sizeof(SocialForceRoomAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-
-			cudaMemcpy(dataIdxArrayHost, this->originalAgentsHost->dataIdxArray, sizeof(int) * numAgentLocal, cudaMemcpyDeviceToHost);
-
-			for(int i = 0; i < numElemHost; i ++) {
-				int dataIdx = dataIdxArrayHost[i];
-				fout << dataHost[dataIdx].id
-					<< "\t" << dataHost[dataIdx].neibCount 
-					<< "\t" << dataHost[dataIdx].loc.x 
-					<< "\t" << dataHost[dataIdx].loc.y 
-					<< "\t"	<< dataHost[dataIdx].velocity.x 
-					<< "\t" << dataHost[dataIdx].velocity.y 
-					<< "\t" << std::endl;
-				fout.flush();
-			}
-			fout <<"-------------------"<<std::endl;
-
-#if defined(CLONE)
-			numElemHost = this->clone1->agentsHost->numElem;
-			//std::cout<<" "<<numElemHost<<std::endl;
-			if (stepCountHost % 2 == 0) {
-				cudaMemcpy(dataHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceRoomAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceRoomAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-			} else {
-				cudaMemcpy(dataHost, this->clone1->agentsHost->dataArray, sizeof(SocialForceRoomAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-				cudaMemcpy(dataCopyHost, this->clone1->agentsHost->dataCopyArray, sizeof(SocialForceRoomAgentData) * numAgentLocal, cudaMemcpyDeviceToHost);
-			}
-
-			cudaMemcpy(dataIdxArrayHost, this->clone1->agentsHost->dataIdxArray, sizeof(int) * numAgentLocal, cudaMemcpyDeviceToHost);
-
-			for(int i = 0; i < numElemHost; i ++) {
-				int dataIdx = dataIdxArrayHost[i];
-				fout << dataHost[dataIdx].id
-					<< "\t" << dataHost[dataIdx].neibCount 
-					<< "\t" << dataHost[dataIdx].loc.x 
-					<< "\t" << dataHost[dataIdx].loc.y
-					<< "\t"	<< dataHost[dataIdx].velocity.x 
-					<< "\t" << dataHost[dataIdx].velocity.y 
-					<< "\t" << std::endl;
-				fout.flush();
-			}
-			//fout <<"-------------------"<<std::endl;
-			//for(int i = 0; i < numElemHost; i ++) {
-			//	int dataIdx = dataIdxArrayHost[i];
-			//	fout << dataCopyHost[dataIdx].id
-			//		<< "\t" << dataCopyHost[dataIdx].loc.x 
-			//		<< "\t" << dataCopyHost[dataIdx].loc.y
-			//		<< "\t"	<< dataCopyHost[dataIdx].velocity.x 
-			//		<< "\t" << dataCopyHost[dataIdx].velocity.y 
-			//		<< "\t" << std::endl;
-			//	fout.flush();
-			//}
-			fout <<"==================="<<std::endl<<std::endl;
-			fout.flush();
-#endif
-
-#elif defined(VALIDATE)
-		cudaMemcpyFromSymbol(&throughputHost, throughput, sizeof(int));
-		fout<<throughputHost<<std::endl;
-		fout.flush();
-#endif
 
 		//5. swap data and dataCopy
 		this->originalAgentsHost->swapPool();
@@ -657,15 +572,14 @@ public:
 	GWorld *myWorld;
 
 	int id;
-#ifdef CLONE
 	int cloneid;
+#ifdef CLONE
 	bool cloned[NUM_CLONE];
 	bool cloning[NUM_CLONE];
 #endif
 
 	SocialForceRoomAgent *myOrigin;
-	obstacleLine *myWall;
-	double gateSize;
+	//double gateSize;
 
 
 	__device__ void computeIndivSocialForceRoom(const SocialForceRoomAgentData &myData, const SocialForceRoomAgentData &otherData, double2 &fSum){
@@ -853,6 +767,21 @@ public:
 			}
 		}
 	}
+	__device__ void alterWall(obstacleLine &wall, int cloneid, int i) {
+		double gateSize;
+		int base = cloneid * NUM_ALTERABLE_GATES;
+		switch(i) {
+		case 2:	gateSize = gateSizes[base]; wall.ey -= gateSize; break;
+		case 3:	gateSize = gateSizes[base]; wall.sy += gateSize; break;
+		case 9: gateSize = gateSizes[base+2]; wall.sx += gateSize; break;
+		case 6: gateSize = gateSizes[base+2]; wall.ex -= gateSize; break;
+		case 7: gateSize = gateSizes[base+3]; wall.ey -= gateSize; break;
+		case 8: gateSize = gateSizes[base+3]; wall.sy += gateSize; 
+				gateSize = gateSizes[base+1]; wall.ey -= gateSize; break;
+		case 5: gateSize = gateSizes[base+1]; wall.sy += gateSize; break;
+		default: break;
+		}
+	}
 	__device__ void step(GModel *model){
 		SocialForceRoomModel *sfModel = (SocialForceRoomModel*)model;
 		double cMass = 100;
@@ -880,8 +809,9 @@ public:
 
 		//compute force with wall
 		for (int i = 0; i < NUM_WALLS; i++) {
-		computeForceWithWall(dataLocal, walls[i], cMass, fSum);
-
+			obstacleLine wall = walls[i];
+			alterWall(wall, cloneid, i);
+			computeForceWithWall(dataLocal, wall, cMass, fSum);
 		}
 		//computeForceWithWall(dataLocal, myWall[0], cMass, fSum);
 		//computeForceWithWall(dataLocal, myWall[1], cMass, fSum);
@@ -932,7 +862,9 @@ public:
 
 		double mint = 1;
 		for (int i = 0; i < NUM_WALLS; i++) {
-			computeWallImpaction(dataLocal, walls[i], newVelo, tick, mint);
+			obstacleLine wall = walls[i];
+			alterWall(wall, cloneid, i);
+			computeWallImpaction(dataLocal, wall, newVelo, tick, mint);
 		}
 		//computeWallImpaction(dataLocal, myWall[0], newVelo, tick, mint);
 		//computeWallImpaction(dataLocal, myWall[1], newVelo, tick, mint);
@@ -1021,8 +953,9 @@ public:
 		this->color = colorConfigs.green;
 		this->id = dataSlot;
 
-#ifdef CLONE
 		this->cloneid = 0;
+#ifdef CLONE
+		
 		for (int i = 0; i < NUM_CLONE; i++) {
 			this->cloned[i] = false;
 			this->cloning[i] = false;
@@ -1049,25 +982,9 @@ public:
 		dataLocal.v0 = 2;
 		dataLocal.mass = 50;
 
+		dataLocal.goal = make_double2(0.5 * modelDevParams.WIDTH, 0.7 * modelDevParams.HEIGHT);
+		//chooseNewGoal(dataLocal.loc, 0, dataLocal.goal);
 
-		double2 goal1 = make_double2(0.25 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
-		double2 goal2 = make_double2(0.75 * modelDevParams.WIDTH, 0.50 * modelDevParams.HEIGHT);
-		double2 goal3 = make_double2(0.50 * modelDevParams.WIDTH, 0.70 * modelDevParams.HEIGHT);
-		
-#ifdef NDEBUG
-		if(dataLocal.loc.x < (0.75 - 0.5 * CLONE_PERCENT) * modelDevParams.WIDTH) {
-			dataLocal.goal = goal1;
-			myWall = &walls[0];
-			gateSize = LEFT_GATE_SIZE;
-		} else 
-#endif
-		{
-			dataLocal.goal = goal2;
-			myWall = &walls[2];
-			gateSize = RIGHT_GATE_SIZE_A;
-		}
-		
-		dataLocal.goal = goal3;
 		this->data = sfModel->originalAgents->dataInSlot(dataSlot);
 		this->dataCopy = sfModel->originalAgents->dataCopyInSlot(dataSlot);
 		*(SocialForceRoomAgentData*)this->data = dataLocal;
@@ -1083,8 +1000,6 @@ public:
 		int cloneid) 
 	{
 		this->myWorld = clonedWorld;
-
-		this->gateSize = gateSizes[cloneid-1];
 		this->color = colors[cloneid-1];
 
 		this->cloneid = cloneid;
@@ -1094,7 +1009,6 @@ public:
 			this->cloning[i] = false;
 		}
 		this->myOrigin = originPtr;
-		this->myWall = &walls[cloneid * 2 + 2];
 
 		SocialForceRoomAgentData dataLocal, dataCopyLocal;
 
