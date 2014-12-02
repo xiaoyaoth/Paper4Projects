@@ -191,18 +191,8 @@ public:
 class GModel
 {
 public:
-	GWorld *world, *worldHost;
-	GScheduler *scheduler, *schedulerHost;
 	GModel *model;
 public:
-	__host__ GModel() 
-	{
-		schedulerHost = new GScheduler();
-		util::hostAllocCopyToDevice<GScheduler>(schedulerHost, &scheduler);
-
-		//worldHost = new GWorld(modelHostParams.WIDTH, modelHostParams.HEIGHT);
-		//util::hostAllocCopyToDevice< GWorld > (worldHost, &world);
-	}
 	__host__ virtual void start() = 0;
 	__host__ virtual void preStep() = 0;
 	__host__ virtual void step() = 0;

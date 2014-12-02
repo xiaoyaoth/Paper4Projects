@@ -232,7 +232,7 @@ public:
 		srand(time(NULL));
 		for (int i = 0; i < NUM_CLONE + 1; i++) {
 			for (int j = 0; j < NUM_GATES; j++)
-				gateSizesHost[i * NUM_GATES + j] = (i + 1) * 2;
+				gateSizesHost[i * NUM_GATES + j] = (i + 1);
 		}
 		cudaMemcpyToSymbol(gateSizes, &gateSizesHost[0], (1 + NUM_CLONE) * NUM_GATES * sizeof(double));
 
@@ -304,11 +304,6 @@ public:
 		for (int i = 0; i < NUM_CLONE; i++) {
 			clones[i]->start(originalClone->agentsHost->agentPtrArray, numAgentLocal);
 		}
-#endif
-
-		//paint related
-#ifdef _WIN32
-		GSimVisual::getInstance().setWorld(this->world);
 #endif
 		//timer related
 		cudaEventCreate(&timerStart);
@@ -518,7 +513,6 @@ public:
 	SocialForceRoomAgent *myOrigin;
 	//double gateSize;
 
-
 	__device__ void computeIndivSocialForceRoom(const SocialForceRoomAgentData &myData, const SocialForceRoomAgentData &otherData, double2 &fSum){
 		double cMass = 100;
 		//my data
@@ -727,7 +721,6 @@ public:
 		if (i == 2) {gate.sx -= gateSize; gate.ex += gateSize;} 
 	}
 	__device__ void step(GModel *model){
-		SocialForceRoomModel *sfModel = (SocialForceRoomModel*)model;
 		double cMass = 100;
 
 		SocialForceRoomAgentData dataLocal = *(SocialForceRoomAgentData*)this->data;
@@ -833,35 +826,6 @@ public:
 		double goalTemp = goal.x;
 
 		chooseNewGoal(newLoc, mass/cMass, newGoal);
-
-		/*
-		if (goal.x < 0.5 * modelDevParams.WIDTH
-			&& (newLoc.x - mass/cMass <= 0.25 * modelDevParams.WIDTH) 
-			&& (newLoc.y - mass/cMass > 0.5 * modelDevParams.HEIGHT - gateSize) 
-			&& (newLoc.y - mass/cMass < 0.5 * modelDevParams.HEIGHT + gateSize)) 
-		{
-			newGoal.x = 0;
-		}
-
-		if (goal.x > 0.5 * modelDevParams.WIDTH
-			&& (newLoc.x + mass/cMass >= 0.75 * modelDevParams.WIDTH) 
-			&& (newLoc.y - mass/cMass > 0.5 * modelDevParams.HEIGHT - gateSize) 
-			&& (newLoc.y - mass/cMass < 0.5 * modelDevParams.HEIGHT + gateSize)) 
-		{
-			newGoal.x = modelDevParams.WIDTH;
-#ifdef VALIDATE
-#ifdef CLONE
-			if (goalTemp != newGoal.x && this->cloneid == CHOSEN_CLONE_ID) 
-#else
-			if (goalTemp != newGoal.x) 	
-#endif
-			{
-				atomicInc(&throughput, 8192);
-			}
-#endif
-		}
-		*/
-
 
 		newLoc.x = correctCrossBoader(newLoc.x, modelDevParams.WIDTH);
 		newLoc.y = correctCrossBoader(newLoc.y, modelDevParams.HEIGHT);
