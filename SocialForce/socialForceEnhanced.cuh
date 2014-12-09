@@ -101,13 +101,19 @@ struct obstacleLine
 #define k2 (2.4 * 100000)
 #define	maxv 3
 
-#define NUM_CLONE 2
 #define NUM_WALLS 10
-#define NUM_GATES 1
-#define CHOSEN_CLONE_ID NUM_CLONE
+#define NUM_GATES 3
+
 __constant__ double2 gateLocs[NUM_GATES];
 __constant__ obstacleLine walls[NUM_WALLS];
-__constant__ double gateSizes[(NUM_CLONE + 1) * NUM_GATES]; 
+//__constant__ double gateSizes[NUM_GATE_0_CHOICES]; 
+
+#define NUM_GATE_0_CHOICES 2
+#define NUM_GATE_1_CHOICES 2
+#define NUM_GATE_2_CHOICES 2
+__constant__ double gate0Sizes[NUM_GATE_0_CHOICES];
+__constant__ double gate1Sizes[NUM_GATE_1_CHOICES];
+__constant__ double gate2Sizes[NUM_GATE_2_CHOICES];
 
 #define GATE_LINE_NUM 2
 #define LEFT_GATE_SIZE 2
@@ -178,7 +184,7 @@ public:
 		util::hostAllocCopyToDevice<GWorld>(clonedWorldHost, &clonedWorld);
 
 		//alloc untouched agent array
-		cudaMalloc((void**)&unsortedAgentPtrArray, num * sizeof(SocialForceRoomAgent*) );
+		cudaMalloc((void**)&unsortedAgentPtrArray, modelHostParams.MAX_AGENT_NO * sizeof(SocialForceRoomAgent*) );
 
 		cloneid = cloneCount++;
 		
@@ -186,16 +192,35 @@ public:
 		memcpy(&color, &r, sizeof(uchar4));
 
 		memcpy(this->cloneidArray, cloneidArrayVal, NUM_GATES * sizeof(int));
+
+		for (cloneLevel = NUM_GATES-1; cloneLevel >= 0; cloneLevel--)
+			if (cloneidArray[cloneLevel] != 0)
+				break;
+
+		for (int i = 0; i < NUM_GATES; i++) {
+			cloneMasks[i] = 1;
+			cloneMasks[i] = cloneMasks[i] << cloneidArray[i];
+			cloneMasks[i] = cloneMasks[i] >> 1;
+		}
 		
 		util::hostAllocCopyToDevice<SocialForceRoomClone>(this, &this->cloneDev);
 
 	}
-	__host__ void stepPhase1(SocialForceRoomClone *fatherClone, int num);
+	__host__ void stepPhase1(SocialForceRoomClone *fatherClone);
 	__host__ void stepPhase2(SocialForceRoomModel *modelHost);
 	__host__ void stepPhase3();
 	__host__ void stepPhase4();
 };
 #endif
+
+__global__ void inspect(SocialForceRoomClone *childClone, SocialForceRoomClone *fatherClone) {
+	int idx = threadIdx.x + blockIdx.x * blockDim.x;
+	if (idx < childClone->agents->numElem) {
+		SocialForceRoomAgent *ag = childClone->agents->agentPtrArray[idx];
+		SocialForceRoomAgent *ag2 = fatherClone->agents->agentPtrArray[idx];
+	}
+}
+
 class SocialForceRoomModel : public GModel {
 public:
 	GRandom *random, *randomHost;
@@ -256,13 +281,18 @@ public:
 #endif
 		fout.open(outfname, std::ios::out);
 
-		double *gateSizesHost = (double*)malloc(sizeof(double) * (1 + NUM_CLONE) * NUM_GATES);
+		double *gateSizesHost = (double*)malloc(sizeof(double) * NUM_GATE_0_CHOICES);
 		srand(time(NULL));
-		for (int i = 0; i < NUM_CLONE + 1; i++) {
-			for (int j = 0; j < NUM_GATES; j++)
-				gateSizesHost[i * NUM_GATES + j] = (i + 1);
-		}
-		cudaMemcpyToSymbol(gateSizes, &gateSizesHost[0], (1 + NUM_CLONE) * NUM_GATES * sizeof(double));
+
+		for (int j = 0; j < NUM_GATE_0_CHOICES; j++)
+			gateSizesHost[j] = (j + 1);
+		cudaMemcpyToSymbol(gate0Sizes, &gateSizesHost[0], NUM_GATE_0_CHOICES * sizeof(double));
+		for (int j = 0; j < NUM_GATE_1_CHOICES; j++)
+			gateSizesHost[j] = (j + 1);
+		cudaMemcpyToSymbol(gate1Sizes, &gateSizesHost[0], NUM_GATE_1_CHOICES * sizeof(double));
+		for (int j = 0; j < NUM_GATE_2_CHOICES; j++)
+			gateSizesHost[j] = (j + 1);
+		cudaMemcpyToSymbol(gate2Sizes, &gateSizesHost[0], NUM_GATE_2_CHOICES * sizeof(double));
 
 		//init obstacles
 		obstacleLine wallsHost[NUM_WALLS];
@@ -282,15 +312,14 @@ public:
 		cudaMemcpyToSymbol(walls, &wallsHost, NUM_WALLS * sizeof(obstacleLine));
 
 		double2 gateLocsHost[NUM_GATES];
-		gateLocsHost[0] = make_double2(0.9 * wLocal, 0.3 * hLocal);
-		//gateLocsHost[1] = make_double2(0.5 * wLocal, 0.7 * hLocal);
-		//gateLocsHost[2] = make_double2(0.3 * wLocal, 0.5 * hLocal);
-		//gateLocsHost[3] = make_double2(0.5 * wLocal, 0.3 * hLocal);
+		gateLocsHost[0] = make_double2(0.5 * wLocal, 0.7 * hLocal);
+		gateLocsHost[1] = make_double2(0.3 * wLocal, 0.5 * hLocal);
+		gateLocsHost[2] = make_double2(0.5 * wLocal, 0.3 * hLocal);
 		cudaMemcpyToSymbol(gateLocs, &gateLocsHost, NUM_GATES * sizeof(double2));
 
 		numClones = 1;
 		for(int i = 0; i < NUM_GATES; i++) {
-			numChoicesPerGate[i] = 3;
+			numChoicesPerGate[i] = 2;
 			numClones *= numChoicesPerGate[i];
 		}
 		
@@ -327,6 +356,14 @@ public:
 		//add original agents
 		int gSize = GRID_SIZE(numAgentLocal);
 		addAgentsOnDevice<<<gSize, BLOCK_SIZE>>>(random, numAgentLocal, clones[0]->cloneDev);
+		cudaMemcpy(clones[0]->unsortedAgentPtrArray, clones[0]->agentsHost->agentPtrArray,
+				modelHostParams.AGENT_NO * sizeof(void*), cudaMemcpyDeviceToDevice);
+		for (int i = 1; i < numClones; i++) {
+			cudaMemcpy(clones[i]->unsortedAgentPtrArray, clones[0]->agentsHost->agentPtrArray,
+				modelHostParams.AGENT_NO * sizeof(void*), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(clones[i]->clonedWorldHost->allAgents, clones[0]->agentsHost->agentPtrArray,
+				modelHostParams.AGENT_NO * sizeof(void*), cudaMemcpyDeviceToDevice);
+		}
 
 		//timer related
 		cudaEventCreate(&timerStart);
@@ -339,12 +376,16 @@ public:
 	__host__ void preStep()
 	{
 		//switch world
-		int numInst = NUM_CLONE + 1;
 		
 #ifdef _WIN32
 #ifdef CLONE
-		int chosen = GSimVisual::clicks % numInst;
-		GSimVisual::getInstance().setWorld(clones[chosen]->clonedWorld);
+		int chosen = (GSimVisual::clicks + 7) % numClones;
+		GSimVisual::getInstance().setWorld(clones[chosen]->clonedWorld, clones[chosen]->agentsHost->numElem);
+		printf("Chosen clone: %d. Config: [%d, %d, %d]\n", 
+			chosen, 
+			clones[chosen]->cloneidArray[0], 
+			clones[chosen]->cloneidArray[1], 
+			clones[chosen]->cloneidArray[2]);
 #endif
 #endif
 		getLastCudaError("copyHostToDevice");
@@ -358,26 +399,23 @@ public:
 
 		TIMER_START(0);
 		//1. run the original copy
-		clones[0]->stepPhase1(NULL, modelHostParams.AGENT_NO);
+		clones[0]->stepPhase1(NULL);
 		clones[0]->stepPhase2(this);
 		TIMER_END(0, "0", 0);
 
-		//2. run the clones
 #ifdef CLONE
-		//for (int i = 0; i < NUM_CLONE; i++) {
-			//clones[i]->step(this->originalAgentsHost->agentPtrArray, numAgentLocal, this);
-		//}
+		//2. run the clones
 		int childVal[NUM_GATES];
 		int fatherVal[NUM_GATES];
 		for (int i = 1; i < numClones; i++) {
 			decode(i, childVal);
 			fatherCloneidArray(childVal, fatherVal);
-			SocialForceRoomClone *fatherClone = clones[encode(fatherVal)];
-			clones[i]->stepPhase1(fatherClone, modelHostParams.AGENT_NO);
+			int code = encode(fatherVal);
+			SocialForceRoomClone *fatherClone = clones[code];
+			clones[i]->stepPhase1(fatherClone);
 			clones[i]->stepPhase2(this);
 			clones[i]->stepPhase3();
 		}
-		
 #endif
 
 		//debug info, print the real data of original agents and cloned agents, or throughputs
@@ -385,7 +423,7 @@ public:
 		//5. swap data and dataCopy
 		clones[0]->agentsHost->swapPool();
 #ifdef CLONE
-		for (int i = 1; i < NUM_CLONE; i++) {
+		for (int i = 1; i < numClones; i++) {
 			clones[i]->agentsHost->swapPool();
 		}
 #endif
@@ -414,13 +452,17 @@ public:
 
 #ifdef CLONE
 int SocialForceRoomClone::cloneCount = 0;
-__host__ void SocialForceRoomClone::stepPhase1(SocialForceRoomClone *fatherClone, int num) {
+__host__ void SocialForceRoomClone::stepPhase1(SocialForceRoomClone *fatherClone) {
 
-	if (fatherClone->unsortedAgentPtrArray == NULL) {
+	if (fatherClone == NULL) {
 		this->agentsHost->registerPool(this->clonedWorldHost, NULL, this->agents);
 		util::genNeighbor(this->clonedWorld, this->clonedWorldHost, this->agentsHost->numElem);
 		return;
 	}
+
+	int numFatherAgent = fatherClone->agentsHost->numElem;
+	if (numFatherAgent == 0)
+		return;
 
 	float time = 0;
 	cudaEvent_t timerStart, timerStop;
@@ -428,10 +470,10 @@ __host__ void SocialForceRoomClone::stepPhase1(SocialForceRoomClone *fatherClone
 	cudaEventCreate(&timerStop);
 
 	//1.1 clone agents
-	int gSize = GRID_SIZE(num);
+	int gSize = GRID_SIZE(numFatherAgent);
 	cudaDeviceSynchronize();
 	TIMER_START(cloneStream);
-	cloneKernel<<<gSize, BLOCK_SIZE, 0, cloneStream>>>(fatherClone, this->cloneDev, num, cloneid);
+	cloneKernel<<<gSize, BLOCK_SIZE, 0, cloneStream>>>(fatherClone->cloneDev, this->cloneDev, numFatherAgent, cloneid);
 	TIMER_END(cloneid, "1",cloneStream);
 
 
@@ -440,9 +482,17 @@ __host__ void SocialForceRoomClone::stepPhase1(SocialForceRoomClone *fatherClone
 	TIMER_START(cloneStream);
 	cudaMemcpyAsync(this->unsortedAgentPtrArray,
 		fatherClone->unsortedAgentPtrArray, 
-		num * sizeof(void*), 
-		cudaMemcpyDeviceToDevice, cloneStream);
+		modelHostParams.MAX_AGENT_NO * sizeof(void*), 
+		cudaMemcpyDeviceToDevice, 
+		cloneStream);
+	cudaMemcpyAsync(this->clonedWorldHost->allAgents, 
+		fatherClone->unsortedAgentPtrArray,
+		modelHostParams.MAX_AGENT_NO * sizeof(void*),
+		cudaMemcpyDeviceToDevice,
+		cloneStream);
 	TIMER_END(cloneid, "2",cloneStream);
+
+	inspect<<<gSize, BLOCK_SIZE>>>(this->cloneDev, fatherClone->cloneDev);
 
 	TIMER_START(cloneStream);
 	//necessary cleanup, reason: 1. accumulative clean up of the step, 2. prepare the following step
@@ -450,22 +500,22 @@ __host__ void SocialForceRoomClone::stepPhase1(SocialForceRoomClone *fatherClone
 	TIMER_END(cloneid, "2.1",cloneStream);
 	getLastCudaError("stepstepPhase1");
 
-	int numAgentsB = this->agentsHost->numElem;
-	if (numAgentsB == 0)
+	int numChildAgents = this->agentsHost->numElem;
+	if (numChildAgents == 0)
 		return;
 	
 	TIMER_START(cloneStream);
-	replaceOriginalWithClone<<<gSize, BLOCK_SIZE, 0, cloneStream>>>(this->cloneDev,	numAgentsB);
+	replaceOriginalWithClone<<<gSize, BLOCK_SIZE, 0, cloneStream>>>(this->cloneDev,	numChildAgents);
 	cudaMemcpyAsync(this->clonedWorldHost->allAgents, 
 		this->unsortedAgentPtrArray,
-		modelHostParams.AGENT_NO,
+		modelHostParams.MAX_AGENT_NO * sizeof(void*),
 		cudaMemcpyDeviceToDevice,
 		cloneStream);
 	TIMER_END(cloneid, "2.2",cloneStream);
 
 	//2.2. sort world and worldClone
 	TIMER_START(cloneStream);
-	util::genNeighbor(this->clonedWorld, this->clonedWorldHost, modelHostParams.AGENT_NO);
+	util::genNeighbor(this->clonedWorld, this->clonedWorldHost, numChildAgents);
 	TIMER_END(cloneid, "2.3",cloneStream);
 	getLastCudaError("stepstepPhase2");
 }
@@ -527,9 +577,6 @@ public:
 	int id;
 	int cloneid;
 #ifdef CLONE
-	bool cloned[NUM_CLONE];
-	bool cloning[NUM_CLONE];
-
 	int flagCloning[NUM_GATES];
 	int flagCloned[NUM_GATES];
 	int cloneidArray[NUM_GATES];
@@ -663,10 +710,6 @@ public:
 				neighborCount++;
 				computeIndivSocialForceRoom(dataLocal, otherDataLocal, fSum);
 #ifdef CLONE
-				for (int i = 0; i < NUM_CLONE; i++)
-					if (otherPtr->cloned[i] == true) // decision point B: impaction from neighboring agent
-						this->cloning[i] = true;
-				
 				for (int i = 0; i < NUM_GATES; i++) {
 					this->flagCloning[i] |= otherPtr->flagCloned[i];
 				}
@@ -727,28 +770,23 @@ public:
 			}
 		}
 	}
-	__device__ void alterWall(obstacleLine &wall, int i) {
+	__device__ void alterWall(obstacleLine &wall, int wallId) {
 		double gateSize;
-		int base = cloneid * NUM_GATES;
-		if (2 == i)	{gateSize = gateSizes[base]; wall.ey += gateSize;}
-		if (3 == i)	{gateSize = gateSizes[base]; wall.sy -= gateSize;}
-		if (9 == i)	{gateSize = gateSizes[base+2]; wall.sx += gateSize;}
-		if (6 == i)	{gateSize = gateSizes[base+2]; wall.ex -= gateSize;}
-		if (7 == i)	{gateSize = gateSizes[base+3]; wall.ey -= gateSize;}
-		if (8 == i)	{gateSize = gateSizes[base+3]; wall.sy += gateSize;
-					 gateSize = gateSizes[base+3]; wall.ey -= gateSize;}
-		if (5 == i)	{gateSize = gateSizes[base+1]; wall.sy += gateSize;}
+		if (9 == wallId)	{int choice = cloneidArray[1]; gateSize = gate1Sizes[choice]; wall.sx += gateSize;}
+		if (6 == wallId)	{int choice = cloneidArray[1]; gateSize = gate1Sizes[choice]; wall.ex -= gateSize;}
+		if (7 == wallId)	{int choice = cloneidArray[2]; gateSize = gate2Sizes[choice]; wall.ey -= gateSize;}
+		if (8 == wallId)	{int choice = cloneidArray[2]; gateSize = gate2Sizes[choice]; wall.sy += gateSize;
+								 choice = cloneidArray[0]; gateSize = gate0Sizes[choice]; wall.ey -= gateSize;}
+		if (5 == wallId)	{int choice = cloneidArray[0]; gateSize = gate0Sizes[choice]; wall.sy += gateSize;}
 	}
 	__device__ void alterGate(obstacleLine &gate, int i) {
 		double2 gateLoc = gateLocs[i];
 		gate.sx = gate.ex = gateLoc.x;
 		gate.sy = gate.ey = gateLoc.y;
-		double gateSize = gateSizes[NUM_CLONE * NUM_GATES];
-		//double gateSize = gateSizes[NUM_CLONE * NUM_GATES];
-		if (i == 0) {gate.sy -= gateSize; gate.ey += gateSize;} 
-		if (i == 1) {gate.sy -= gateSize; gate.ey += gateSize;} 
-		if (i == 3) {gate.sy -= gateSize; gate.ey += gateSize;} 
-		if (i == 2) {gate.sx -= gateSize; gate.ex += gateSize;} 
+		double gateSize;
+		if (i == 0) {gateSize = gate0Sizes[NUM_GATE_0_CHOICES-1]; gate.sy -= gateSize; gate.ey += gateSize;} 
+		if (i == 1) {gateSize = gate1Sizes[NUM_GATE_1_CHOICES-1]; gate.sx -= gateSize; gate.ex += gateSize;} 
+		if (i == 2) {gateSize = gate2Sizes[NUM_GATE_2_CHOICES-1]; gate.sy -= gateSize; gate.ey += gateSize;} 
 	}
 	__device__ void step(GModel *model){
 		double cMass = 100;
@@ -794,9 +832,6 @@ public:
 			obstacleLine gate;
 			alterGate(gate, i);
 			if(gate.pointToLineDist(loc) < 2) {
-				for (int i = 0; i < NUM_CLONE; i++)
-					if (this->cloned[i] == false)
-						this->cloning[i] = true;
 				//current agent impacted by a chosing gate;
 				this->flagCloning[i] = gateMask;
 			}
@@ -895,10 +930,8 @@ public:
 #ifdef CLONE
 		for (int i = 0; i < NUM_GATES; i++) {
 			this->cloneidArray[i] = 0;
-		}
-		for (int i = 0; i < NUM_CLONE; i++) {
-			this->cloned[i] = false;
-			this->cloning[i] = false;
+			this->flagCloning[i] = 0;
+			this->flagCloned[i] = 0;
 		}
 #endif
 		this->myOrigin = NULL;
@@ -935,9 +968,10 @@ public:
 
 		this->cloneid = cloneid;
 		this->id = agent.id;
-		for (int i = 0; i < NUM_CLONE; i++){
-			this->cloned[i] = false;
-			this->cloning[i] = false;
+		for (int i = 0; i < NUM_GATES; i++) {
+			this->cloneidArray[i] = clone->cloneidArray[i];
+			this->flagCloning[i] = originPtr->flagCloning[i]; // or 0?
+			this->flagCloned[i] = originPtr->flagCloned[i]; // or 0?
 		}
 		this->myOrigin = originPtr;
 
@@ -985,10 +1019,12 @@ __global__ void cloneKernel(SocialForceRoomClone *fatherClone,
 		SocialForceRoomAgent ag, *agPtr = fatherClone->agents->agentPtrArray[idx];
 		ag = *agPtr;
 
-		int cloneidLocal = cloneid - 1;
-		if( ag.cloning[cloneidLocal] == true && ag.cloned[cloneidLocal] == false) {
-			ag.cloned[cloneidLocal] = true;
-			ag.cloning[cloneidLocal] = false;
+		int cloneLevelLocal = childClone->cloneLevel;
+		int cloneMaskLocal = childClone->cloneMasks[cloneLevelLocal];
+		int cloneDecision = ~ag.flagCloned[cloneLevelLocal] & cloneMaskLocal & ag.flagCloning[cloneLevelLocal];
+		if (cloneDecision > 0) {
+			ag.flagCloned[cloneLevelLocal] |= cloneMaskLocal;
+			ag.flagCloning[cloneLevelLocal] &= ~cloneMaskLocal;
 			*agPtr = ag;
 
 			AgentPool<SocialForceRoomAgent, SocialForceRoomAgentData> *childAgentPool = childClone->agents;
@@ -998,22 +1034,17 @@ __global__ void cloneKernel(SocialForceRoomClone *fatherClone,
 
 			SocialForceRoomAgent *ag2 = childAgentPool->agentInSlot(dataSlot);
 			ag2->initNewClone(ag, agPtr, dataSlot, childClone, cloneid);
-			childClone->agents->add(ag2, agentSlot);
-		}
-
-		int cloneLevelLocal = childClone->cloneLevel;
-		int cloneMaskLocal = childClone->cloneMasks[cloneLevelLocal];
-		int cloneDecision = ~ag.flagCloned[cloneLevelLocal] & cloneMaskLocal & ag.flagCloning[cloneLevelLocal];
-		if (cloneDecision > 0) {
-			ag.flagCloned[cloneLevelLocal] |= cloneMaskLocal;
-			ag.flagCloning[cloneLevelLocal] &= ~cloneMaskLocal;
-			*agPtr = ag;
+			childAgentPool->add(ag2, agentSlot);
 		}
 	}
 }
 
 __global__ void replaceOriginalWithClone(SocialForceRoomClone* childClone, int numClonedAgent)
 {
+	if (childClone->unsortedAgentPtrArray == NULL) {
+		printf("cloneid: [%d, %d, %d]", childClone->cloneidArray[0],childClone->cloneidArray[1],childClone->cloneidArray[2]);
+		return;
+	}
 	uint idx = threadIdx.x + blockIdx.x * blockDim.x;
 	if (idx < numClonedAgent){
 		SocialForceRoomAgent *ag = childClone->agents->agentPtrArray[idx];

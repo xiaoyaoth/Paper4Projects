@@ -128,7 +128,7 @@ public:
 		return instance;
 	}
 
-	void setWorld(GWorld *world){
+	void setWorld(GWorld *world, int numAgents){
 #ifdef _WIN32
 		if (VISUALIZE == true) {
 			GSimVisual::getInstance().world = world;
