@@ -910,7 +910,7 @@ void doLoop(GModel *mHost){
 
 	for (; stepCountHost<STEPS; stepCountHost++){
 		//if ((i%(STEPS/100))==0) 
-		printf("STEP:%d ", stepCountHost);
+		//printf("STEP:%d ", stepCountHost);
 		cudaMemcpyToSymbol(stepCount, &stepCountHost, sizeof(int));
 		cudaEventRecord(start, 0);
 
