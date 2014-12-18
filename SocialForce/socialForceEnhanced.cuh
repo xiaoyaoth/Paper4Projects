@@ -110,9 +110,9 @@ __constant__ double2 gateLocs[NUM_GATES];
 __constant__ obstacleLine walls[NUM_WALLS];
 //__constant__ double gateSizes[NUM_GATE_0_CHOICES]; 
 
-#define NUM_GATE_0_CHOICES 3
-#define NUM_GATE_1_CHOICES 3
-#define NUM_GATE_2_CHOICES 3
+#define NUM_GATE_0_CHOICES 2
+#define NUM_GATE_1_CHOICES 2
+#define NUM_GATE_2_CHOICES 2
 __constant__ double gate0Sizes[NUM_GATE_0_CHOICES];
 __constant__ double gate1Sizes[NUM_GATE_1_CHOICES];
 __constant__ double gate2Sizes[NUM_GATE_2_CHOICES];
@@ -130,14 +130,14 @@ __constant__ double gate2Sizes[NUM_GATE_2_CHOICES];
 #define CLONE_COMPARE
 #define CLONE_PERCENT 0.5
 
-#define TIMER_START(cloneStream) ;
-//cudaEventRecord(timerStart, cloneStream);
+#define TIMER_START(cloneStream) \
+	cudaEventRecord(timerStart, cloneStream);
 
-#define TIMER_END(cloneid, stage, cloneStream) ;
-//cudaEventRecord(timerStop, cloneStream); \
-cudaEventSynchronize(timerStop); \
-cudaEventElapsedTime(&time, timerStart, timerStop); \
-printf ("cloneid: %d, stage %s time: %f ms\n", cloneid, stage, time);
+#define TIMER_END(cloneid, stage, cloneStream) \
+	cudaEventRecord(timerStop, cloneStream); \
+	cudaEventSynchronize(timerStop); \
+	cudaEventElapsedTime(&time, timerStart, timerStop); \
+	printf ("cloneid: %d, stage %s time: %f ms\n", cloneid, stage, time);
 
 #ifdef VALIDATE
 __device__ uint throughput[NUM_GATES];
@@ -759,7 +759,7 @@ public:
 					this->flagCloning[i] |= otherPtr->flagCloned[i];
 				}
 #endif
-
+#ifdef VALIDATE
 				if (stepCount == MONITOR_STEP && MONITOR_ID == id) {
 					printf("%d ", stepCount);
 					printf("%d ", this->id);
@@ -768,6 +768,7 @@ public:
 					printf("%d] ", cloneidArray[2]);
 					printf("%d, [%f, %f], [%f, %f], [%f, %f]\n", otherPtr->id, otherDataLocal.loc.x, otherDataLocal.loc.y, otherDataLocal.velocity.x, otherDataLocal.velocity.y, otherDataLocal.goal.x, otherDataLocal.goal.y);
 				}
+#endif
 			}
 			otherData = world->nextAgentDataFromSharedMem<SocialForceRoomAgentData>(info);
 		}
@@ -828,7 +829,7 @@ public:
 		if (6 == wallId)	{int choice = cloneidArray[1]; gateSize = gate1Sizes[choice]; wall.ex -= gateSize;}
 		if (7 == wallId)	{int choice = cloneidArray[2]; gateSize = gate2Sizes[choice]; wall.ey -= gateSize;}
 		if (8 == wallId)	{int choice = cloneidArray[2]; gateSize = gate2Sizes[choice]; wall.sy += gateSize;
-		choice = cloneidArray[0]; gateSize = gate0Sizes[choice]; wall.ey -= gateSize;}
+								 choice = cloneidArray[0]; gateSize = gate0Sizes[choice]; wall.ey -= gateSize;}
 		if (5 == wallId)	{int choice = cloneidArray[0]; gateSize = gate0Sizes[choice]; wall.sy += gateSize;}
 	}
 	__device__ void alterGate(obstacleLine &gate, int i) {
