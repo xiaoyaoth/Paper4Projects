@@ -117,6 +117,8 @@ __constant__ double gate0Sizes[NUM_GATE_0_CHOICES];
 __constant__ double gate1Sizes[NUM_GATE_1_CHOICES];
 __constant__ double gate2Sizes[NUM_GATE_2_CHOICES];
 
+char cloneName[100];
+
 #define GATE_LINE_NUM 2
 #define LEFT_GATE_SIZE 2
 #ifdef CLONE
@@ -183,6 +185,7 @@ public:
 		util::hostAllocCopyToDevice<AgentPool<SocialForceRoomAgent, SocialForceRoomAgentData> >(agentsHost, &agents);
 
 		clonedWorldHost = new GWorld();
+		clonedWorldHost->numAgentWorld = num;
 		util::hostAllocCopyToDevice<GWorld>(clonedWorldHost, &clonedWorld);
 
 		//alloc untouched agent array
@@ -266,7 +269,7 @@ public:
 		}
 	}
 	__host__ SocialForceRoomModel(char **modelArgs) {
-		int num = modelHostParams.AGENT_NO;
+		int numAgentLocal = modelHostParams.AGENT_NO;
 		//init gate size
 		double *gateSizesHost = (double*)malloc(sizeof(double) * NUM_GATE_0_CHOICES);
 		srand(time(NULL));
@@ -314,15 +317,15 @@ public:
 		char *outfname = new char[30];
 #ifdef _DEBUG
 #ifdef CLONE
-		sprintf(outfname, "agent_%d_clone_%d.txt", num, numClones);
+		sprintf(outfname, "agent_%d_clone_%d.txt", numAgentLocal, numClones);
 #else
-		sprintf(outfname, "agent_%d_gate_%d_single.txt", num, RIGHT_GATE_SIZE_A);
+		sprintf(outfname, "agent_%d_gate_%d_single.txt", numAgentLocal, RIGHT_GATE_SIZE_A);
 #endif
 #else
 #ifdef CLONE
-		sprintf(outfname, "throughput_clone_%d_%d.txt", num, numClones);
+		sprintf(outfname, "throughput_clone_%d_%d.txt", numAgentLocal, numClones);
 #else
-		sprintf(outfname, "throughput_single_%d.txt", num, RIGHT_GATE_SIZE_A);
+		sprintf(outfname, "throughput_single_%d.txt", numAgentLocal, RIGHT_GATE_SIZE_A);
 #endif
 #endif
 		fout.open(outfname, std::ios::out);
@@ -331,7 +334,7 @@ public:
 		clones = (SocialForceRoomClone **)malloc(numClones * sizeof(SocialForceRoomClone*));
 		for (int i = 0; i < numClones; i++) {
 			this->decode(i, cloneidArrayValLocal);
-			clones[i] = new SocialForceRoomClone(modelHostParams.AGENT_NO, cloneidArrayValLocal);
+			clones[i] = new SocialForceRoomClone(numAgentLocal, cloneidArrayValLocal);
 		}
 
 		//init utility
@@ -363,12 +366,12 @@ public:
 		int gSize = GRID_SIZE(numAgentLocal);
 		addAgentsOnDevice<<<gSize, BLOCK_SIZE>>>(random, numAgentLocal, clones[0]->cloneDev);
 		cudaMemcpy(clones[0]->unsortedAgentPtrArray, clones[0]->agentsHost->agentPtrArray,
-			modelHostParams.AGENT_NO * sizeof(void*), cudaMemcpyDeviceToDevice);
+			numAgentLocal * sizeof(void*), cudaMemcpyDeviceToDevice);
 		for (int i = 1; i < numClones; i++) {
 			cudaMemcpy(clones[i]->unsortedAgentPtrArray, clones[0]->agentsHost->agentPtrArray,
-				modelHostParams.AGENT_NO * sizeof(void*), cudaMemcpyDeviceToDevice);
+				numAgentLocal * sizeof(void*), cudaMemcpyDeviceToDevice);
 			cudaMemcpy(clones[i]->clonedWorldHost->allAgents, clones[0]->agentsHost->agentPtrArray,
-				modelHostParams.AGENT_NO * sizeof(void*), cudaMemcpyDeviceToDevice);
+				numAgentLocal * sizeof(void*), cudaMemcpyDeviceToDevice);
 		}
 
 		//timer related
@@ -386,7 +389,19 @@ public:
 #ifdef _WIN32
 #ifdef CLONE
 		int chosen = (GSimVisual::clicks + 1) % numClones;
-		GSimVisual::getInstance().setWorld(clones[chosen]->clonedWorld, clones[chosen]->agentsHost->numElem);
+		sprintf(cloneName, "clone: %d - [ ", clones[chosen]->cloneid);
+		int len = 0; 
+		char temp[4];
+		for (int i = 0; i < NUM_GATES; i++) {
+			itoa(clones[chosen]->cloneidArray[i], temp, 10);
+			strcat(cloneName, temp);
+			strcat(cloneName, " ");
+		}
+		strcat(cloneName, "]");
+		GSimVisual::getInstance().setWorld(
+			clones[chosen]->clonedWorld, 
+			clones[chosen]->clonedWorldHost->numAgentWorld,
+			cloneName);
 #endif
 #endif
 		getLastCudaError("copyHostToDevice");
@@ -496,8 +511,15 @@ int SocialForceRoomClone::cloneCount = 0;
 __host__ void SocialForceRoomClone::stepPhase1(SocialForceRoomClone *fatherClone) {
 
 	if (fatherClone == NULL) {
-		this->agentsHost->registerPool(this->clonedWorldHost, NULL, this->agents);
-		util::genNeighbor(this->clonedWorld, this->clonedWorldHost, this->agentsHost->numElem);
+		this->agentsHost->cleanup(this->agents);
+
+		cudaMemcpyAsync(this->clonedWorldHost->allAgents, 
+			this->unsortedAgentPtrArray,
+			modelHostParams.MAX_AGENT_NO * sizeof(void*),
+			cudaMemcpyDeviceToDevice,
+			cloneStream);
+
+		util::genNeighbor(this->clonedWorld, this->clonedWorldHost, this->clonedWorldHost->numAgentWorld);
 		return;
 	}
 
@@ -551,7 +573,7 @@ __host__ void SocialForceRoomClone::stepPhase1(SocialForceRoomClone *fatherClone
 
 	//2.2. sort world and worldClone
 	TIMER_START(cloneStream);
-	util::genNeighbor(this->clonedWorld, this->clonedWorldHost, modelHostParams.AGENT_NO);
+	util::genNeighbor(this->clonedWorld, this->clonedWorldHost, this->clonedWorldHost->numAgentWorld);
 	TIMER_END(cloneid, "2.3",cloneStream);
 	getLastCudaError("stepstepPhase2");
 }
@@ -591,9 +613,9 @@ __host__ void SocialForceRoomClone::stepPhase3() {
 	TIMER_END(cloneid, "3",cloneStream);
 
 	//4. clean pool again, since some agents are removed
-	TIMER_START(cloneStream);
-	this->agentsHost->cleanup(this->agents);
-	TIMER_END(cloneid, "4",cloneStream);
+	//TIMER_START(cloneStream);
+	//this->agentsHost->cleanup(this->agents);
+	//TIMER_END(cloneid, "4",cloneStream);
 #endif
 
 	cudaEventDestroy(timerStart);
@@ -602,7 +624,6 @@ __host__ void SocialForceRoomClone::stepPhase3() {
 }
 #endif
 
-//remove all the AGENT_NO
 __device__ double correctCrossBoader(double val, double limit)
 {
 	if (val > limit)

@@ -21,6 +21,7 @@ public:
 	GLuint bufferObj;
 	cudaGraphicsResource *resource;
 	GWorld *world;
+	int numAgentVisual;
 	int width;
 	int height;
 	int dotScale; // actual width = width * dotScale
@@ -107,7 +108,7 @@ public:
 		getLastCudaError("cudaMemset");
 
 		glEnable(GL_TEXTURE_2D);
-		int gSize = GRID_SIZE(modelHostParams.AGENT_NO);
+		int gSize = GRID_SIZE(vis.numAgentVisual);
 		cudaMemcpyToSymbol(clicksDev, &clicks, sizeof(int));
 
 		visUtil::paint<<<gSize, BLOCK_SIZE>>>(devPtr, vis.world, vis.width, vis.height, vis.dotScale);
@@ -128,10 +129,12 @@ public:
 		return instance;
 	}
 
-	void setWorld(GWorld *world, int numAgents){
+	void setWorld(GWorld *world, int numAgent, char *cloneName){
 #ifdef _WIN32
 		if (VISUALIZE == true) {
 			GSimVisual::getInstance().world = world;
+			GSimVisual::getInstance().numAgentVisual = numAgent;
+			glutSetWindowTitle(cloneName);
 		}
 #endif
 	}
@@ -156,7 +159,7 @@ int GSimVisual::clicks = 0;
 __global__ void visUtil::paint(uchar4 *devPtr, const GWorld *world, int width, int height, int dotScale)
 {
 	int idx = threadIdx.x + blockIdx.x * blockDim.x;
-	if (idx < modelDevParams.AGENT_NO){
+	if (idx < world->numAgentWorld){
 		GAgent *ag = world->allAgents[idx];
 		FLOATn myLoc = ag->data->loc;
 		int canvasX = (int)(myLoc.x) * width * dotScale; 
