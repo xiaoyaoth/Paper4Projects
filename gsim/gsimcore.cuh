@@ -825,8 +825,8 @@ void readConfig(char *config_file){
 size_t sizeOfSmem = 0;
 template<class SharedMemoryData> void init(char *configFile)
 {
-	cudaDeviceSetCacheConfig(cudaFuncCachePreferShared);
-	getLastCudaError("setting cache preference");
+	//cudaDeviceSetCacheConfig(cudaFuncCachePreferShared);
+	//getLastCudaError("setting cache preference");
 	readConfig(configFile);
 
 	size_t pVal;
