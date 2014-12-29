@@ -443,7 +443,14 @@ public:
 			clones[i]->stepParallel1(fatherClone);
 		}
 
-
+		for (int i = 1; i < numClones; i++) {
+			decode(i, childVal);
+			fatherCloneidArray(childVal, fatherVal);
+			int fatherCloneid = encode(fatherVal);
+			SocialForceRoomClone *fatherClone = clones[fatherCloneid];
+			clones[i]->stepParallel2(fatherClone, this);
+		}
+		/*
 		for (int i = 1; i < numClones; i++) {
 			decode(i, childVal);
 			fatherCloneidArray(childVal, fatherVal);
@@ -461,6 +468,7 @@ public:
 				cloneLaunched[i] = true;
 			}
 		}
+		*/
 
 
 		for(int i = 0; i < numClones; i++) {
