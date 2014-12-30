@@ -11,9 +11,9 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{0E685634-7078-4CB4-BA21-81C0BDABB63F}</ProjectGuid>
+    <ProjectGuid>{257CD8F2-3C8E-4372-8D4F-263443315CAD}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>TrafficSimulationCpp</RootNamespace>
+    <RootNamespace>TestStreamSyncCpp</RootNamespace>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
